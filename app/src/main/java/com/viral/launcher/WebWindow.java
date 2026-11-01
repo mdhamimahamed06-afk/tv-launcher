@@ -9,7 +9,10 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.inputmethod.EditorInfo;
+import android.widget.EditText;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebChromeClient;
@@ -28,9 +31,10 @@ final class WebWindow extends FrameLayout {
         void onWindowClosed(WebWindow w);
         void onFullscreenVideo(View v, WebChromeClient.CustomViewCallback cb);
         void onFullscreenVideoEnd();
+        void onSaveSite(String name, String url);
     }
 
-    static final int RED = 0xFFE11D2E;
+    static int RED = 0xFFE11D2E;
 
     final String name;
     final int slot;
@@ -38,11 +42,20 @@ final class WebWindow extends FrameLayout {
     boolean maximized = false;
 
     private final Host host;
-    private final WebView web;
-    private final TextView titleView;
+    private WebView web;
+    private TextView titleView;
+    private EditText addr;
+    private TextView bDesk;
+    private boolean desktop = false;
+    private String mobileUa = "";
+    static final String DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
     private int rl, rt, rw, rh;
 
     WebWindow(Context ctx, String name, String url, Host host, int slot) {
+        this(ctx, name, url, null, host, slot);
+    }
+
+    WebWindow(Context ctx, String name, String url, View content, Host host, int slot) {
         super(ctx);
         this.name = name;
         this.slot = slot;
@@ -73,6 +86,18 @@ final class WebWindow extends FrameLayout {
         titleView.setSingleLine(true);
         titleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         bar.addView(titleView, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView bL = barBtn("\u25E7");
+        bL.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { snap(true); }
+        });
+        bar.addView(bL, new LinearLayout.LayoutParams(dp(46), dp(32)));
+
+        TextView bR = barBtn("\u25E8");
+        bR.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { snap(false); }
+        });
+        bar.addView(bR, new LinearLayout.LayoutParams(dp(46), dp(32)));
 
         TextView bMin = barBtn("–");
         bMin.setOnClickListener(new View.OnClickListener() {
@@ -115,6 +140,76 @@ final class WebWindow extends FrameLayout {
         });
         bar.setOnLongClickListener(null);
 
+        if (content != null) {
+            col.addView(content, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        } else {
+        // ---- address bar
+        LinearLayout tb = new LinearLayout(ctx);
+        tb.setOrientation(LinearLayout.HORIZONTAL);
+        tb.setGravity(Gravity.CENTER_VERTICAL);
+        tb.setBackgroundColor(0xFF15151B);
+        tb.setPadding(dp(6), dp(3), dp(6), dp(3));
+        col.addView(tb, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+
+        TextView bBack = barBtn("\u2039");
+        bBack.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        bBack.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { if (web.canGoBack()) web.goBack(); }
+        });
+        tb.addView(bBack, new LinearLayout.LayoutParams(dp(40), dp(34)));
+
+        TextView bRef = barBtn("\u27F3");
+        bRef.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { web.reload(); }
+        });
+        tb.addView(bRef, new LinearLayout.LayoutParams(dp(40), dp(34)));
+
+        addr = new EditText(ctx);
+        addr.setSingleLine(true);
+        addr.setTextColor(Color.WHITE);
+        addr.setHintTextColor(0x88FFFFFF);
+        addr.setHint("Type address or search");
+        addr.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        addr.setPadding(dp(10), 0, dp(10), 0);
+        addr.setImeOptions(EditorInfo.IME_ACTION_GO);
+        addr.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        addr.setBackground(box(0xFF26262E, 0x44FFFFFF, 17, 1));
+        addr.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            public boolean onEditorAction(TextView v, int id, KeyEvent e) {
+                if (id == EditorInfo.IME_ACTION_GO || id == EditorInfo.IME_ACTION_DONE
+                        || (e != null && e.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+                    load(addr.getText().toString());
+                    web.requestFocus();
+                    return true;
+                }
+                return false;
+            }
+        });
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        alp.setMargins(dp(4), 0, dp(4), 0);
+        tb.addView(addr, alp);
+
+        bDesk = barBtn("PC");
+        bDesk.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        bDesk.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { setDesktop(!desktop); }
+        });
+        tb.addView(bDesk, new LinearLayout.LayoutParams(dp(44), dp(34)));
+
+        TextView bStar = barBtn("\u2605");
+        bStar.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                String u = web.getUrl();
+                if (u == null || u.startsWith("about:")) return;
+                String n = titleView.getText().toString();
+                if (n.length() > 18) n = n.substring(0, 18);
+                WebWindow.this.host.onSaveSite(n, u);
+            }
+        });
+        tb.addView(bStar, new LinearLayout.LayoutParams(dp(40), dp(34)));
+
         // ---- web page
         web = new WebView(ctx);
         WebSettings s = web.getSettings();
@@ -126,11 +221,17 @@ final class WebWindow extends FrameLayout {
         s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false);
         try {
-            s.setUserAgentString(s.getUserAgentString().replace("; wv", ""));
+            mobileUa = s.getUserAgentString().replace("; wv", "");
+            s.setUserAgentString(mobileUa);
         } catch (Exception e) {
             // keep default
         }
         web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView v, String u, android.graphics.Bitmap b) {
+                if (u != null && !addr.hasFocus() && !u.startsWith("about:")) addr.setText(u);
+            }
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, String u) {
                 return !(u.startsWith("http://") || u.startsWith("https://"));
@@ -161,6 +262,7 @@ final class WebWindow extends FrameLayout {
         col.addView(web, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         web.loadUrl(url);
+        }
 
         // ---- resize grip (bottom-right corner)
         View grip = new View(ctx) {
@@ -252,6 +354,44 @@ final class WebWindow extends FrameLayout {
         setLayoutParams(l);
     }
 
+    // ---------- address / desktop mode ----------
+
+    void load(String input) {
+        String t = input.trim();
+        if (t.length() == 0) return;
+        String u;
+        if (t.startsWith("http://") || t.startsWith("https://")) u = t;
+        else if (t.indexOf(' ') < 0 && t.indexOf('.') > 0) u = "https://" + t;
+        else u = "https://www.google.com/search?q=" + android.net.Uri.encode(t);
+        web.loadUrl(u);
+    }
+
+    void setDesktop(boolean on) {
+        desktop = on;
+        WebSettings s = web.getSettings();
+        s.setUserAgentString(on ? DESKTOP_UA : mobileUa);
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
+        bDesk.setText(on ? "MOB" : "PC");
+        web.reload();
+    }
+
+    void snap(boolean left) {
+        if (!(getParent() instanceof View)) return;
+        View p = (View) getParent();
+        int pad = dp(10);
+        int w = (p.getWidth() - pad * 3) / 2;
+        FrameLayout.LayoutParams l = lp();
+        maximized = false;
+        l.width = w;
+        l.height = p.getHeight() - pad * 2;
+        l.topMargin = pad;
+        l.leftMargin = left ? pad : pad * 2 + w;
+        setLayoutParams(l);
+        bringToFront();
+        host.onWindowChanged();
+    }
+
     // ---------- window actions ----------
 
     void toggleMax() {
@@ -288,7 +428,7 @@ final class WebWindow extends FrameLayout {
         minimized = false;
         setVisibility(View.VISIBLE);
         bringToFront();
-        web.requestFocus();
+        if (web != null) web.requestFocus();
         host.onWindowChanged();
     }
 
@@ -310,18 +450,18 @@ final class WebWindow extends FrameLayout {
     }
 
     boolean canGoBack() {
-        return web.canGoBack();
+        return web != null && web.canGoBack();
     }
 
     void goBack() {
-        web.goBack();
+        if (web != null) web.goBack();
     }
 
     void pauseWeb() {
-        web.onPause();
+        if (web != null) web.onPause();
     }
 
     void resumeWeb() {
-        web.onResume();
+        if (web != null) web.onResume();
     }
 }

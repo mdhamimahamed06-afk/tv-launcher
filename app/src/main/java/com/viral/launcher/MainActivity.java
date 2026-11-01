@@ -1,6 +1,14 @@
 package com.viral.launcher;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextWatcher;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -30,6 +38,7 @@ import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebChromeClient;
@@ -68,7 +77,10 @@ import java.util.TimeZone;
 
 public class MainActivity extends Activity {
 
-    static final int RED = 0xFFE11D2E;
+    static int RED = 0xFFE11D2E;
+    private static final int[] ACCENTS = {0xFFE11D2E, 0xFF2F7BFF, 0xFF19B36B, 0xFF8B5CF6, 0xFFF59E0B};
+    private static boolean booted = false;
+    private static boolean startupDone = false;
 
     static class AppItem {
         String pkg, cls, label;
@@ -118,6 +130,29 @@ public class MainActivity extends Activity {
     // web windows (YouTube, Google, ... inside draggable windows on the desktop)
     private static final String SITE_URL = "https://www.google.com/search?q=Viral+Quality";
     private FrameLayout desk, fsHost;
+    private View clockBlock;
+    private LinearLayout webBox;
+
+    private void refreshWebMenu() {
+        if (webBox == null) return;
+        webBox.removeAllViews();
+        String all = prefs.getString("sites", "");
+        for (String line : all.split("\n")) {
+            int i = line.indexOf('\t');
+            if (i <= 0) continue;
+            final String n = line.substring(0, i), u = line.substring(i + 1);
+            final String entry = line;
+            TextView t = addMenu(webBox, "\u2605 " + n, new Runnable() { public void run() { openWeb(n, u); } });
+            t.setOnLongClickListener(new View.OnLongClickListener() {
+                public boolean onLongClick(View v) {
+                    prefs.edit().putString("sites", prefs.getString("sites", "").replace(entry + "\n", "")).apply();
+                    refreshWebMenu();
+                    toast("Removed: " + n);
+                    return true;
+                }
+            });
+        }
+    }
     private LinearLayout tabsBox;
     private final List<WebWindow> wins = new ArrayList<>();
 
@@ -141,6 +176,14 @@ public class MainActivity extends Activity {
                 bigTime.setText(fBig.format(d));
                 bigDate.setText(fDate.format(d));
                 trayClock.setText(fTray.format(d));
+            }
+            if (slideOn) {
+                long now = System.currentTimeMillis();
+                if (lastSlide == 0) lastSlide = now;
+                if (now - lastSlide > 300000L) {
+                    lastSlide = now;
+                    nextWall();
+                }
             }
             clockView.invalidate();
             h.postDelayed(this, 40);
@@ -238,7 +281,7 @@ public class MainActivity extends Activity {
             float r = Math.min(w, hh) / 2f - dp(4);
 
             p.setStyle(Paint.Style.FILL);
-            p.setColor(0x66000000);
+            p.setColor(0x00000000);
             c.drawCircle(cx, cy, r, p);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(dp(2));
@@ -257,7 +300,7 @@ public class MainActivity extends Activity {
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(dp(4));
             p.setStrokeCap(Paint.Cap.ROUND);
-            p.setColor(0x33E11D2E);
+            p.setColor((RED & 0xFFFFFF) | 0x33000000);
             c.drawArc(rf, -90, 360, false, p);
             p.setColor(RED);
             c.drawArc(rf, -90, sec * 6f, false, p);
@@ -373,6 +416,9 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         getWindow().setBackgroundDrawable(new ColorDrawable(0xFF000000));
         prefs = getSharedPreferences("vq", MODE_PRIVATE);
+        RED = ACCENTS[Math.abs(prefs.getInt("accent", 0)) % ACCENTS.length];
+        WebWindow.RED = RED;
+        slideOn = prefs.getBoolean("slide", false);
         customFile = new File(getFilesDir(), "custom_wall.jpg");
         wallIdx = prefs.getInt("wall", 0);
         applyTz(prefs.getString("tz", ""));
@@ -399,7 +445,10 @@ public class MainActivity extends Activity {
         desk = new FrameLayout(this);
         col.addView(desk, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        desk.addView(buildClockBlock(dm), clockLp());
+        buildDeskIcons(dm);
+        clockBlock = buildClockBlock(dm);
+        desk.addView(clockBlock, clockLp());
+        clockBlock.setVisibility(prefs.getBoolean("clockoff", false) ? View.GONE : View.VISIBLE);
 
         View line = new View(this);
         line.setBackgroundColor(0x33FFFFFF);
@@ -438,7 +487,15 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         fsHost.setVisibility(View.GONE);
 
+        buildPanels(root);
+
         setContentView(root);
+        if (!booted) {
+            booted = true;
+            if (prefs.getString("pin", "").length() > 0) lockNow(); else runStartup();
+        } else if (prefs.getString("pin", "").length() == 0) {
+            startupDone = true;
+        }
         applyWall();
         refreshVol();
         registerReceiver(volReceiver, new IntentFilter("android.media.VOLUME_CHANGED_ACTION"));
@@ -457,8 +514,9 @@ public class MainActivity extends Activity {
     private FrameLayout.LayoutParams clockLp() {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.END | Gravity.CENTER_VERTICAL);
-        lp.rightMargin = dp(48);
+                Gravity.END | Gravity.TOP);
+        lp.rightMargin = dp(28);
+        lp.topMargin = dp(20);
         return lp;
     }
 
@@ -467,11 +525,11 @@ public class MainActivity extends Activity {
         c.setOrientation(LinearLayout.VERTICAL);
         c.setGravity(Gravity.CENTER_HORIZONTAL);
 
-        int sz = Math.min(dp(250), (int) (dm.heightPixels * 0.42f));
+        int sz = Math.min(dp(130), (int) (dm.heightPixels * 0.22f));
         clockView = new ClockView(this);
         c.addView(clockView, new LinearLayout.LayoutParams(sz, sz));
 
-        bigTime = label("", 42, Color.WHITE, false);
+        bigTime = label("", 26, Color.WHITE, false);
         bigTime.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
         bigTime.setShadowLayer(dp(4), 0, dp(1), 0xAA000000);
         bigTime.setGravity(Gravity.CENTER);
@@ -480,7 +538,7 @@ public class MainActivity extends Activity {
         tp.topMargin = dp(10);
         c.addView(bigTime, tp);
 
-        bigDate = label("", 16, 0xFFFFFFFF, false);
+        bigDate = label("", 13, 0xFFFFFFFF, false);
         bigDate.setShadowLayer(dp(4), 0, dp(1), 0xAA000000);
         bigDate.setGravity(Gravity.CENTER);
         c.addView(bigDate);
@@ -492,13 +550,20 @@ public class MainActivity extends Activity {
         t.setOrientation(LinearLayout.HORIZONTAL);
         t.setGravity(Gravity.CENTER_VERTICAL);
         t.setPadding(dp(14), 0, dp(36), 0);
-        t.setBackgroundColor(0xE60A0A0E);
+        t.setBackgroundColor(prefs.getBoolean("glass", false) ? 0x990A0A0E : 0xE60A0A0E);
+        taskbarView = t;
 
         startBtn = btn("■  START", true);
         startBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { toggleStart(); }
         });
         t.addView(startBtn, tbLp());
+
+        TextView searchBtn = btn("Search", false);
+        searchBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { openSearch(); }
+        });
+        t.addView(searchBtn, tbLp());
 
         for (int i = 0; i < 3; i++) {
             slots[i] = makeSlot(i);
@@ -526,6 +591,14 @@ public class MainActivity extends Activity {
         sk.setMargins(0, 0, dp(16), 0);
         t.addView(spk, sk);
         trayClock = label("", 18, Color.WHITE, true);
+        trayClock.setFocusable(true);
+        trayClock.setClickable(true);
+        trayClock.setPadding(dp(10), 0, dp(10), 0);
+        trayClock.setGravity(Gravity.CENTER_VERTICAL);
+        trayClock.setBackground(stateBg(false));
+        trayClock.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { toggleCal(); }
+        });
         t.addView(trayClock);
         return t;
     }
@@ -556,6 +629,17 @@ public class MainActivity extends Activity {
             fsHost.setVisibility(View.VISIBLE);
         }
 
+        public void onSaveSite(String name, String url) {
+            String old = prefs.getString("sites", "");
+            if (old.contains("\t" + url + "\n")) {
+                toast("Already saved");
+                return;
+            }
+            prefs.edit().putString("sites", old + name.replace("\t", " ").replace("\n", " ") + "\t" + url + "\n").apply();
+            refreshWebMenu();
+            toast("Saved to START menu: " + name);
+        }
+
         public void onFullscreenVideoEnd() {
             fsHost.removeAllViews();
             fsHost.setVisibility(View.GONE);
@@ -567,14 +651,34 @@ public class MainActivity extends Activity {
     private View fsView;
     private WebChromeClient.CustomViewCallback fsCb;
 
-    private void openWeb(String name, String url) {
-        hideStart();
+    private boolean showExisting(String name) {
         for (WebWindow w : wins) {
             if (w.name.equals(name)) {
                 w.show();
-                return;
+                return true;
             }
         }
+        return false;
+    }
+
+    private void openWeb(String name, String url) {
+        hideStart();
+        if (showExisting(name)) return;
+        openWin(name, url, null, false);
+    }
+
+    private void openTool(String name) {
+        hideStart();
+        if (showExisting(name)) return;
+        View v;
+        if (name.equals("Files")) v = Tools.files(this, RED);
+        else if (name.equals("Notepad")) v = Tools.notepad(this, prefs);
+        else if (name.equals("Calculator")) v = Tools.calculator(this, RED);
+        else v = Tools.monitor(this, RED);
+        openWin(name, null, v, name.equals("Calculator"));
+    }
+
+    private void openWin(String name, String url, View content, boolean small) {
         if (wins.size() >= 2) {
             WebWindow old = wins.get(0);
             String n = old.name;
@@ -589,17 +693,32 @@ public class MainActivity extends Activity {
         int dh = desk.getHeight() > 0 ? desk.getHeight() : dm.heightPixels - dp(64);
         int pad = dp(10);
         int w = (dw - pad * 3) / 2, hgt = dh - pad * 2;
+        if (small) {
+            w = Math.min(w, dp(380));
+            hgt = Math.min(hgt, dp(520));
+        }
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, hgt);
-        lp.leftMargin = slot == 0 ? pad : pad * 2 + w;
+        lp.leftMargin = slot == 0 ? pad : dw - pad - w;
         lp.topMargin = pad;
         try {
-            WebWindow win = new WebWindow(this, name, url, winHost, slot);
+            WebWindow win = new WebWindow(this, name, url, content, winHost, slot);
             desk.addView(win, lp);
             wins.add(win);
         } catch (Throwable t) {
-            toast("Web view is not available on this box");
+            toast("Could not open window");
         }
         refreshTabs();
+    }
+
+    private void searchWeb(String q) {
+        for (WebWindow w : wins) {
+            if (w.name.equals("Browser")) {
+                w.load(q);
+                w.show();
+                return;
+            }
+        }
+        openWin("Browser", "https://www.google.com/search?q=" + Uri.encode(q), null, false);
     }
 
     private WebWindow topWindow() {
@@ -641,6 +760,575 @@ public class MainActivity extends Activity {
             });
             tabsBox.addView(t, tbLp());
         }
+    }
+
+    // ---------- desktop extras ----------
+
+    private LinearLayout iconsBox, ctxMenu, searchPanel, searchResults, calPanel, calGrid, taskbarView;
+    private FrameLayout ctxLayer, lockView;
+    private EditText searchEt;
+    private TextView calTitle, lockTitle, lockDots;
+    private final Calendar calShown = Calendar.getInstance();
+    private String lockEntry = "";
+    private boolean locked = false;
+    private boolean slideOn = false;
+    private long lastSlide = 0;
+    private float lastX, lastY;
+
+    private GradientDrawable panelBg() {
+        return glass(0xF2101015, 0x44FFFFFF, 16, 1);
+    }
+
+    private void buildDeskIcons(android.util.DisplayMetrics dm) {
+        iconsBox = new LinearLayout(this);
+        iconsBox.setOrientation(LinearLayout.HORIZONTAL);
+        final String[] names = {"YouTube", "Google", "Facebook", "Viral Quality", "Browser", "Files", "Notepad", "Calculator", "System"};
+        final String[] marks = {"Y", "G", "f", "VQ", "B", "F", "N", "=", "S"};
+        final int[] cols = {0xFFE11D2E, 0xFF2F7BFF, 0xFF1877F2, 0xFFB5121F, 0xFF4B5262, 0xFFF59E0B, 0xFF19B36B, 0xFF8B5CF6, 0xFF0EA5A5};
+        int rows = Math.max(3, (int) ((dm.heightPixels / dm.density - 62 - 40) / 94));
+        LinearLayout colBox = null;
+        for (int i = 0; i < names.length; i++) {
+            if (i % rows == 0) {
+                colBox = new LinearLayout(this);
+                colBox.setOrientation(LinearLayout.VERTICAL);
+                iconsBox.addView(colBox, new LinearLayout.LayoutParams(dp(92), ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            colBox.addView(deskIcon(names[i], marks[i], cols[i]), new LinearLayout.LayoutParams(dp(88), dp(92)));
+        }
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.START);
+        lp.leftMargin = dp(14);
+        lp.topMargin = dp(14);
+        desk.addView(iconsBox, lp);
+        iconsBox.setVisibility(prefs.getBoolean("iconsoff", false) ? View.GONE : View.VISIBLE);
+
+        desk.setLongClickable(true);
+        desk.setOnTouchListener(new View.OnTouchListener() {
+            public boolean onTouch(View v, MotionEvent e) {
+                lastX = e.getRawX();
+                lastY = e.getRawY();
+                if ((e.getButtonState() & MotionEvent.BUTTON_SECONDARY) != 0) {
+                    if (e.getActionMasked() == MotionEvent.ACTION_DOWN) showCtx(lastX, lastY);
+                    return true;
+                }
+                return false;
+            }
+        });
+        desk.setOnLongClickListener(new View.OnLongClickListener() {
+            public boolean onLongClick(View v) {
+                showCtx(lastX, lastY);
+                return true;
+            }
+        });
+    }
+
+    private View deskIcon(final String name, String mark, int color) {
+        LinearLayout t = new LinearLayout(this);
+        t.setOrientation(LinearLayout.VERTICAL);
+        t.setGravity(Gravity.CENTER_HORIZONTAL);
+        t.setPadding(0, dp(6), 0, dp(4));
+        t.setFocusable(true);
+        t.setClickable(true);
+        StateListDrawable sl = new StateListDrawable();
+        sl.addState(new int[]{android.R.attr.state_focused}, glass(0x44FFFFFF, 0xFFFFFFFF, 12, 2));
+        sl.addState(new int[]{android.R.attr.state_pressed}, glass(0x55FFFFFF, 0xFFFFFFFF, 12, 2));
+        sl.addState(new int[]{}, glass(0x00000000, 0, 12, 0));
+        t.setBackground(sl);
+        TextView badge = label(mark, 20, Color.WHITE, true);
+        badge.setGravity(Gravity.CENTER);
+        badge.setBackground(glass(color, 0x66FFFFFF, 14, 1));
+        t.addView(badge, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        TextView l = label(name, 11, Color.WHITE, false);
+        l.setSingleLine(true);
+        l.setGravity(Gravity.CENTER);
+        l.setShadowLayer(dp(3), 0, dp(1), 0xCC000000);
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ll.topMargin = dp(4);
+        t.addView(l, ll);
+        t.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { openBuiltin(name); }
+        });
+        return t;
+    }
+
+    private String siteUrl(String name) {
+        if (name.equals("YouTube")) return "https://m.youtube.com";
+        if (name.equals("Google") || name.equals("Browser")) return "https://www.google.com";
+        if (name.equals("Facebook")) return "https://m.facebook.com";
+        if (name.equals("Viral Quality")) return SITE_URL;
+        for (String line : prefs.getString("sites", "").split("\n")) {
+            int i = line.indexOf('\t');
+            if (i > 0 && line.substring(0, i).equals(name)) return line.substring(i + 1);
+        }
+        return null;
+    }
+
+    private void openBuiltin(String name) {
+        if (name.equals("Files") || name.equals("Notepad") || name.equals("Calculator") || name.equals("System")) {
+            openTool(name);
+            return;
+        }
+        String u = siteUrl(name);
+        if (u != null) openWeb(name, u);
+    }
+
+    private void toggleIcons() {
+        boolean off = iconsBox.getVisibility() == View.VISIBLE;
+        iconsBox.setVisibility(off ? View.GONE : View.VISIBLE);
+        prefs.edit().putBoolean("iconsoff", off).apply();
+    }
+
+    private void toggleClock() {
+        boolean off = clockBlock.getVisibility() == View.VISIBLE;
+        clockBlock.setVisibility(off ? View.GONE : View.VISIBLE);
+        prefs.edit().putBoolean("clockoff", off).apply();
+    }
+
+    private void toggleSlide() {
+        slideOn = !slideOn;
+        lastSlide = 0;
+        prefs.edit().putBoolean("slide", slideOn).apply();
+        toast(slideOn ? "Wallpaper changes every 5 minutes" : "Slideshow off");
+    }
+
+    private void toggleGlass() {
+        boolean g = !prefs.getBoolean("glass", false);
+        prefs.edit().putBoolean("glass", g).apply();
+        taskbarView.setBackgroundColor(g ? 0x990A0A0E : 0xE60A0A0E);
+    }
+
+    private void nextAccent() {
+        int i = (prefs.getInt("accent", 0) + 1) % ACCENTS.length;
+        prefs.edit().putInt("accent", i).apply();
+        toast("Accent color changed (windows will close)");
+        recreate();
+    }
+
+    private void cleanRam() {
+        toast("Cleaning RAM...");
+        Tools.cleanRam(this, new Tools.Done() {
+            public void done(long mb) { toast("Freed about " + mb + " MB"); }
+        });
+    }
+
+    private void closeAllPanels() {
+        if (ctxLayer != null) hideCtx();
+        if (searchPanel != null) hideSearch();
+        if (calPanel != null) calPanel.setVisibility(View.GONE);
+    }
+
+    // ----- panels: context menu, search, calendar, lock
+
+    private void buildPanels(FrameLayout root) {
+        // right-click menu
+        ctxLayer = new FrameLayout(this);
+        ctxLayer.setClickable(true);
+        ctxLayer.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { hideCtx(); }
+        });
+        ctxMenu = new LinearLayout(this);
+        ctxMenu.setOrientation(LinearLayout.VERTICAL);
+        ctxMenu.setPadding(dp(8), dp(8), dp(8), dp(4));
+        ctxMenu.setBackground(panelBg());
+        ctxLayer.addView(ctxMenu, new FrameLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(ctxLayer, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        ctxLayer.setVisibility(View.GONE);
+
+        // search
+        searchPanel = new LinearLayout(this);
+        searchPanel.setOrientation(LinearLayout.VERTICAL);
+        searchPanel.setPadding(dp(14), dp(14), dp(14), dp(10));
+        searchPanel.setBackground(panelBg());
+        searchEt = new EditText(this);
+        searchEt.setSingleLine(true);
+        searchEt.setTextColor(Color.WHITE);
+        searchEt.setHintTextColor(0x88FFFFFF);
+        searchEt.setHint("Search apps or the web");
+        searchEt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        searchEt.setPadding(dp(14), 0, dp(14), 0);
+        searchEt.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        searchEt.setBackground(glass(0xFF26262E, 0x55FFFFFF, 12, 1));
+        searchEt.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            public void afterTextChanged(Editable s) { refreshSearch(s.toString()); }
+        });
+        searchEt.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            public boolean onEditorAction(TextView v, int id, KeyEvent e) {
+                if (searchResults.getChildCount() > 0) searchResults.getChildAt(0).performClick();
+                return true;
+            }
+        });
+        searchPanel.addView(searchEt, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        searchResults = new LinearLayout(this);
+        searchResults.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams srl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        srl.topMargin = dp(8);
+        searchPanel.addView(searchResults, srl);
+        FrameLayout.LayoutParams spl = new FrameLayout.LayoutParams(
+                dp(560), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        spl.topMargin = dp(60);
+        root.addView(searchPanel, spl);
+        searchPanel.setVisibility(View.GONE);
+
+        // calendar
+        calPanel = new LinearLayout(this);
+        calPanel.setOrientation(LinearLayout.VERTICAL);
+        calPanel.setPadding(dp(12), dp(10), dp(12), dp(10));
+        calPanel.setBackground(panelBg());
+        LinearLayout hd = new LinearLayout(this);
+        hd.setOrientation(LinearLayout.HORIZONTAL);
+        hd.setGravity(Gravity.CENTER_VERTICAL);
+        TextView prev = btn("\u2039", false);
+        prev.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { calShown.add(Calendar.MONTH, -1); renderCal(); }
+        });
+        hd.addView(prev, new LinearLayout.LayoutParams(dp(46), dp(38)));
+        calTitle = label("", 16, Color.WHITE, true);
+        calTitle.setGravity(Gravity.CENTER);
+        hd.addView(calTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView next = btn("\u203A", false);
+        next.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { calShown.add(Calendar.MONTH, 1); renderCal(); }
+        });
+        hd.addView(next, new LinearLayout.LayoutParams(dp(46), dp(38)));
+        calPanel.addView(hd);
+        LinearLayout wk = new LinearLayout(this);
+        wk.setOrientation(LinearLayout.HORIZONTAL);
+        String[] dn = {"S", "M", "T", "W", "T", "F", "S"};
+        for (String d : dn) {
+            TextView t = label(d, 12, RED, true);
+            t.setGravity(Gravity.CENTER);
+            wk.addView(t, new LinearLayout.LayoutParams(0, dp(28), 1f));
+        }
+        LinearLayout.LayoutParams wkl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        wkl.topMargin = dp(6);
+        calPanel.addView(wk, wkl);
+        calGrid = new LinearLayout(this);
+        calGrid.setOrientation(LinearLayout.VERTICAL);
+        calPanel.addView(calGrid);
+        FrameLayout.LayoutParams cpl = new FrameLayout.LayoutParams(
+                dp(330), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.END);
+        cpl.bottomMargin = dp(72);
+        cpl.rightMargin = dp(16);
+        root.addView(calPanel, cpl);
+        calPanel.setVisibility(View.GONE);
+
+        // lock screen (always on top)
+        lockView = new FrameLayout(this);
+        lockView.setBackgroundColor(0xFA000000);
+        lockView.setClickable(true);
+        LinearLayout lb = new LinearLayout(this);
+        lb.setOrientation(LinearLayout.VERTICAL);
+        lb.setGravity(Gravity.CENTER_HORIZONTAL);
+        lockTitle = label("Enter PIN", 20, Color.WHITE, true);
+        lb.addView(lockTitle);
+        lockDots = label(" ", 30, RED, true);
+        lockDots.setLetterSpacing(0.3f);
+        lockDots.setPadding(0, dp(10), 0, dp(14));
+        lb.addView(lockDots);
+        String[][] keys = {{"1", "2", "3"}, {"4", "5", "6"}, {"7", "8", "9"}, {"CLR", "0", "OK"}};
+        for (String[] r : keys) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            for (final String k : r) {
+                TextView b = btn(k, false);
+                b.setGravity(Gravity.CENTER);
+                b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+                b.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) { lockKey(k); }
+                });
+                LinearLayout.LayoutParams kl = new LinearLayout.LayoutParams(dp(84), dp(54));
+                kl.setMargins(dp(4), dp(4), dp(4), dp(4));
+                row.addView(b, kl);
+            }
+            lb.addView(row);
+        }
+        lockView.addView(lb, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        root.addView(lockView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        lockView.setVisibility(View.GONE);
+    }
+
+    private void addCtx(String text, final Runnable r) {
+        TextView t = btn(text, false);
+        t.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        t.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                hideCtx();
+                r.run();
+            }
+        });
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        p.setMargins(0, 0, 0, dp(5));
+        ctxMenu.addView(t, p);
+    }
+
+    private void showCtx(float x, float y) {
+        if (locked) return;
+        hideStart();
+        ctxMenu.removeAllViews();
+        addCtx("Search", () -> openSearch());
+        addCtx("Calendar", () -> toggleCal());
+        addCtx("Next wallpaper", () -> nextWall());
+        addCtx("Custom wallpaper (QR)", () -> openWallPanel());
+        addCtx("Desktop icons show / hide", () -> toggleIcons());
+        addCtx("Clock show / hide", () -> toggleClock());
+        addCtx("Refresh apps", () -> { loadApps(); toast("Apps refreshed"); });
+        addCtx("Lock screen", () -> lockFromMenu());
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        int est = dp(16) + 8 * dp(47);
+        FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) ctxMenu.getLayoutParams();
+        p.leftMargin = (int) Math.max(0, Math.min(x, dm.widthPixels - dp(250)));
+        p.topMargin = (int) Math.max(0, Math.min(y, dm.heightPixels - est - dp(70)));
+        ctxMenu.setLayoutParams(p);
+        ctxLayer.setVisibility(View.VISIBLE);
+        if (ctxMenu.getChildCount() > 0) ctxMenu.getChildAt(0).requestFocus();
+    }
+
+    private void hideCtx() {
+        ctxLayer.setVisibility(View.GONE);
+    }
+
+    private void openSearch() {
+        closeAllPanels();
+        hideStart();
+        searchEt.setText("");
+        searchResults.removeAllViews();
+        searchPanel.setVisibility(View.VISIBLE);
+        searchEt.requestFocus();
+        h.postDelayed(new Runnable() {
+            public void run() {
+                try {
+                    ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(searchEt, 0);
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
+        }, 200);
+    }
+
+    private void hideSearch() {
+        if (searchPanel.getVisibility() != View.VISIBLE) return;
+        searchPanel.setVisibility(View.GONE);
+        try {
+            ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+                    .hideSoftInputFromWindow(searchEt.getWindowToken(), 0);
+        } catch (Exception e) {
+            // ignore
+        }
+    }
+
+    private void refreshSearch(final String raw) {
+        searchResults.removeAllViews();
+        final String q = raw.trim();
+        if (q.length() == 0) return;
+        String ql = q.toLowerCase(Locale.ENGLISH);
+        int n = 0;
+        for (final AppItem a : apps) {
+            if (n >= 6) break;
+            if (a.label != null && a.label.toLowerCase(Locale.ENGLISH).contains(ql)) {
+                n++;
+                TextView t = btn(a.label, false);
+                t.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+                t.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        hideSearch();
+                        launch(a);
+                    }
+                });
+                LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+                p.setMargins(0, 0, 0, dp(5));
+                searchResults.addView(t, p);
+            }
+        }
+        TextView w = btn("Search the web for \"" + q + "\"", true);
+        w.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        w.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                hideSearch();
+                searchWeb(q);
+            }
+        });
+        searchResults.addView(w, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+    }
+
+    private void toggleCal() {
+        if (calPanel.getVisibility() == View.VISIBLE) {
+            calPanel.setVisibility(View.GONE);
+            return;
+        }
+        closeAllPanels();
+        hideStart();
+        calShown.setTimeInMillis(System.currentTimeMillis());
+        renderCal();
+        calPanel.setVisibility(View.VISIBLE);
+    }
+
+    private void renderCal() {
+        calGrid.removeAllViews();
+        SimpleDateFormat f = new SimpleDateFormat("MMMM yyyy", Locale.ENGLISH);
+        f.setTimeZone(tz);
+        calTitle.setText(f.format(calShown.getTime()));
+        Calendar c = (Calendar) calShown.clone();
+        c.set(Calendar.DAY_OF_MONTH, 1);
+        int first = c.get(Calendar.DAY_OF_WEEK) - 1;
+        int days = c.getActualMaximum(Calendar.DAY_OF_MONTH);
+        Calendar today = Calendar.getInstance(tz);
+        boolean thisMonth = today.get(Calendar.YEAR) == c.get(Calendar.YEAR)
+                && today.get(Calendar.MONTH) == c.get(Calendar.MONTH);
+        int d = 1;
+        for (int r = 0; r < 6; r++) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            for (int k = 0; k < 7; k++) {
+                int idx = r * 7 + k;
+                TextView t = label("", 14, Color.WHITE, false);
+                t.setGravity(Gravity.CENTER);
+                if (idx >= first && d <= days) {
+                    t.setText("" + d);
+                    if (thisMonth && d == today.get(Calendar.DAY_OF_MONTH)) {
+                        t.setBackground(glass(RED, 0, 8, 0));
+                        t.setTypeface(Typeface.DEFAULT_BOLD);
+                    }
+                    d++;
+                }
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(36), 1f);
+                lp.setMargins(dp(1), dp(1), dp(1), dp(1));
+                row.addView(t, lp);
+            }
+            calGrid.addView(row);
+        }
+    }
+
+    // ----- lock screen, PIN, startup site
+
+    private void lockFromMenu() {
+        if (prefs.getString("pin", "").length() == 0) {
+            toast("Set a PIN first (START > Set / change PIN)");
+            return;
+        }
+        lockNow();
+    }
+
+    private void lockNow() {
+        locked = true;
+        lockEntry = "";
+        lockTitle.setText("Enter PIN");
+        updateDots();
+        closeAllPanels();
+        hideStart();
+        lockView.setVisibility(View.VISIBLE);
+        lockView.bringToFront();
+        lockView.getChildAt(0).requestFocus();
+    }
+
+    private void updateDots() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < lockEntry.length(); i++) sb.append("\u25CF");
+        lockDots.setText(sb.length() == 0 ? " " : sb.toString());
+    }
+
+    private void lockKey(String k) {
+        String pin = prefs.getString("pin", "");
+        if (k.equals("CLR")) {
+            lockEntry = "";
+        } else if (k.equals("OK")) {
+            tryUnlock();
+            return;
+        } else if (lockEntry.length() < 8) {
+            lockEntry += k;
+            lockTitle.setText("Enter PIN");
+        }
+        updateDots();
+        if (pin.length() > 0 && lockEntry.length() == pin.length()) tryUnlock();
+    }
+
+    private void tryUnlock() {
+        if (lockEntry.equals(prefs.getString("pin", ""))) {
+            locked = false;
+            lockEntry = "";
+            lockView.setVisibility(View.GONE);
+            runStartup();
+        } else {
+            lockTitle.setText("Wrong PIN");
+            lockEntry = "";
+            updateDots();
+        }
+    }
+
+    private void pinDialog() {
+        final EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        et.setHint("4 to 8 digits (empty = remove PIN)");
+        new AlertDialog.Builder(this)
+                .setTitle("Lock screen PIN")
+                .setView(et)
+                .setPositiveButton("Save", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        String p = et.getText().toString().trim();
+                        if (p.length() == 0) {
+                            prefs.edit().remove("pin").apply();
+                            toast("PIN removed");
+                        } else if (p.length() < 4 || p.length() > 8) {
+                            toast("Use 4 to 8 digits");
+                        } else {
+                            prefs.edit().putString("pin", p).apply();
+                            toast("PIN saved");
+                        }
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void runStartup() {
+        if (startupDone) return;
+        startupDone = true;
+        final String n = prefs.getString("startup", "");
+        if (n.length() == 0) return;
+        h.postDelayed(new Runnable() {
+            public void run() {
+                if (!destroyed) openBuiltin(n);
+            }
+        }, 1500);
+    }
+
+    private void startupDialog() {
+        final List<String> names = new ArrayList<>();
+        names.add("None");
+        names.add("YouTube");
+        names.add("Google");
+        names.add("Facebook");
+        names.add("Viral Quality");
+        for (String line : prefs.getString("sites", "").split("\n")) {
+            int i = line.indexOf('\t');
+            if (i > 0) names.add(line.substring(0, i));
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Open this when the box starts")
+                .setItems(names.toArray(new CharSequence[0]), new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) {
+                        if (which == 0) {
+                            prefs.edit().remove("startup").apply();
+                            toast("No startup site");
+                        } else {
+                            prefs.edit().putString("startup", names.get(which)).apply();
+                            toast("Startup: " + names.get(which));
+                        }
+                    }
+                })
+                .show();
     }
 
     // ---------- pinned apps ----------
@@ -726,6 +1414,28 @@ public class MainActivity extends Activity {
         addMenu(left, "Google", new Runnable() { public void run() { openWeb("Google", "https://www.google.com"); } });
         addMenu(left, "Facebook", new Runnable() { public void run() { openWeb("Facebook", "https://m.facebook.com"); } });
         addMenu(left, "Viral Quality", new Runnable() { public void run() { openWeb("Viral Quality", SITE_URL); } });
+        addMenu(left, "+ New browser window", new Runnable() { public void run() { openWeb("Browser", "https://www.google.com"); } });
+        webBox = new LinearLayout(this);
+        webBox.setOrientation(LinearLayout.VERTICAL);
+        left.addView(webBox);
+        refreshWebMenu();
+        section(left, "TOOLS");
+        addMenu(left, "Files", () -> openTool("Files"));
+        addMenu(left, "Notepad", () -> openTool("Notepad"));
+        addMenu(left, "Calculator", () -> openTool("Calculator"));
+        addMenu(left, "System monitor", () -> openTool("System"));
+        addMenu(left, "Clean RAM", () -> cleanRam());
+        section(left, "DESKTOP");
+        addMenu(left, "Search", () -> openSearch());
+        addMenu(left, "Calendar", () -> toggleCal());
+        addMenu(left, "Desktop icons show / hide", () -> toggleIcons());
+        addMenu(left, "Clock show / hide", () -> toggleClock());
+        addMenu(left, "Wallpaper slideshow on / off", () -> toggleSlide());
+        addMenu(left, "Accent color (next)", () -> nextAccent());
+        addMenu(left, "Taskbar glass / solid", () -> toggleGlass());
+        addMenu(left, "Startup site...", () -> startupDialog());
+        addMenu(left, "Lock screen now", () -> lockFromMenu());
+        addMenu(left, "Set / change PIN", () -> pinDialog());
         section(left, "SYSTEM");
         addMenu(left, "Settings", new Runnable() { public void run() { openSettings(Settings.ACTION_SETTINGS); } });
         addMenu(left, "Wi-Fi / Network", new Runnable() { public void run() { openSettings(Settings.ACTION_WIFI_SETTINGS); } });
@@ -783,7 +1493,7 @@ public class MainActivity extends Activity {
         grid.setHorizontalSpacing(dp(8));
         grid.setPadding(dp(4), dp(4), dp(4), dp(4));
         grid.setClipToPadding(false);
-        grid.setSelector(glass(0x33E11D2E, RED, 14, 2));
+        grid.setSelector(glass((RED & 0xFFFFFF) | 0x33000000, RED, 14, 2));
         grid.setFocusable(true);
         grid.setVerticalScrollBarEnabled(false);
         adapter = new AppAdapter();
@@ -1199,7 +1909,7 @@ public class MainActivity extends Activity {
             Bitmap bmp = BitmapFactory.decodeFile(customFile.getPath(), o2);
             if (bmp == null) return false;
             wall.setImageBitmap(bmp);
-            shade.setBackgroundColor(0x22000000);
+            shade.setBackgroundColor(0x00000000);
             return true;
         } catch (Throwable t) {
             return false;
@@ -1223,7 +1933,7 @@ public class MainActivity extends Activity {
             if (k == 0) {
                 try {
                     wall.setImageDrawable(getResources().getDrawable(img, getTheme()));
-                    shade.setBackgroundColor(0x33000000);
+                    shade.setBackgroundColor(0x00000000);
                     return;
                 } catch (Exception e) {
                     // fall through to gradient
@@ -1468,6 +2178,7 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         hideStart();
+        closeAllPanels();
         if (volPanel != null) hideVol();
         if (wallPanel != null) closeWallPanel();
         if (startBtn != null) startBtn.requestFocus();
@@ -1475,6 +2186,15 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
+        if (locked) {
+            int dgt = -1;
+            if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) dgt = keyCode - KeyEvent.KEYCODE_0;
+            else if (keyCode >= KeyEvent.KEYCODE_NUMPAD_0 && keyCode <= KeyEvent.KEYCODE_NUMPAD_9) dgt = keyCode - KeyEvent.KEYCODE_NUMPAD_0;
+            if (dgt >= 0) { lockKey("" + dgt); return true; }
+            if (keyCode == KeyEvent.KEYCODE_DEL) { lockKey("CLR"); return true; }
+            if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_BACK) return true;
+            return super.onKeyDown(keyCode, e);
+        }
         if (keyCode == KeyEvent.KEYCODE_MENU) {
             toggleStart();
             return true;
@@ -1484,6 +2204,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (locked) return;
+        if (ctxLayer.getVisibility() == View.VISIBLE) { hideCtx(); return; }
+        if (searchPanel.getVisibility() == View.VISIBLE) { hideSearch(); return; }
+        if (calPanel.getVisibility() == View.VISIBLE) { calPanel.setVisibility(View.GONE); return; }
         if (fsView != null) {
             if (fsCb != null) fsCb.onCustomViewHidden();
             winHost.onFullscreenVideoEnd();
