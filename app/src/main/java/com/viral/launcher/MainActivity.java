@@ -8,6 +8,8 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -43,17 +45,22 @@ import android.widget.Toast;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 
 public class MainActivity extends Activity {
 
@@ -80,6 +87,12 @@ public class MainActivity extends Activity {
     private TextView volPct, volPlus;
     private int preMute = -1;
     private int wallIdx;
+    private File customFile;
+    private WallServer server;
+    private String wallKey = "";
+    private LinearLayout wallPanel;
+    private QrView qrView;
+    private TextView wallUrl, wallStatus, wallClose;
     private boolean destroyed = false;
 
     private final int[][] PRESETS = {
@@ -125,6 +138,40 @@ public class MainActivity extends Activity {
             hideVol();
         }
     };
+
+    private class QrView extends View {
+        Qr qr;
+        final Paint qp = new Paint();
+
+        QrView(Context c) {
+            super(c);
+            qp.setAntiAlias(false);
+        }
+
+        void set(Qr q) {
+            qr = q;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            qp.setColor(Color.WHITE);
+            c.drawRect(0, 0, getWidth(), getHeight(), qp);
+            if (qr == null) return;
+            int n = qr.size + 8;
+            int cell = Math.min(getWidth(), getHeight()) / n;
+            int offX = (getWidth() - cell * n) / 2, offY = (getHeight() - cell * n) / 2;
+            qp.setColor(Color.BLACK);
+            for (int y = 0; y < qr.size; y++) {
+                for (int x = 0; x < qr.size; x++) {
+                    if (qr.mod[y][x]) {
+                        int l = offX + (x + 4) * cell, t = offY + (y + 4) * cell;
+                        c.drawRect(l, t, l + cell, t + cell, qp);
+                    }
+                }
+            }
+        }
+    }
 
     private class SpeakerView extends View {
         int level = 3;
@@ -216,6 +263,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         getWindow().setBackgroundDrawable(new ColorDrawable(0xFF000000));
         prefs = getSharedPreferences("vq", MODE_PRIVATE);
+        customFile = new File(getFilesDir(), "custom_wall.jpg");
         wallIdx = prefs.getInt("wall", 0);
 
         FrameLayout root = new FrameLayout(this);
@@ -301,6 +349,12 @@ public class MainActivity extends Activity {
         root.addView(volPanel, vlp);
         volPanel.setVisibility(View.GONE);
 
+        wallPanel = buildWallPanel();
+        FrameLayout.LayoutParams wpl = new FrameLayout.LayoutParams(
+                dp(640), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        root.addView(wallPanel, wpl);
+        wallPanel.setVisibility(View.GONE);
+
         setContentView(root);
         applyWall();
         refreshVol();
@@ -384,7 +438,7 @@ public class MainActivity extends Activity {
 
         TextView wp = btn("Wallpaper", false);
         wp.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { nextWall(); }
+            public void onClick(View v) { openWallPanel(); }
         });
         t.addView(wp, tbLp());
 
@@ -427,7 +481,8 @@ public class MainActivity extends Activity {
         addMenu(m, "Wi-Fi / Network", new Runnable() { public void run() { openSettings(Settings.ACTION_WIFI_SETTINGS); } });
         addMenu(m, "Display", new Runnable() { public void run() { openSettings(Settings.ACTION_DISPLAY_SETTINGS); } });
         addMenu(m, "Apps manager", new Runnable() { public void run() { openSettings(Settings.ACTION_APPLICATION_SETTINGS); } });
-        addMenu(m, "Change wallpaper", new Runnable() { public void run() { nextWall(); } });
+        addMenu(m, "Custom wallpaper (QR)", new Runnable() { public void run() { openWallPanel(); } });
+        addMenu(m, "Next wallpaper", new Runnable() { public void run() { nextWall(); } });
         addMenu(m, "Floating volume button", new Runnable() { public void run() { ensureOverlay(true); } });
         addMenu(m, "Refresh apps", new Runnable() { public void run() { loadApps(); toast("Apps refreshed"); } });
         return m;
@@ -500,6 +555,145 @@ public class MainActivity extends Activity {
         });
         row.addView(mute, new LinearLayout.LayoutParams(dp(84), dp(46)));
         return m;
+    }
+
+    private LinearLayout buildWallPanel() {
+        LinearLayout m = new LinearLayout(this);
+        m.setOrientation(LinearLayout.VERTICAL);
+        m.setPadding(dp(22), dp(18), dp(22), dp(20));
+        m.setBackground(glass(0xF2101015, 0x66FFFFFF, 20, 1));
+
+        TextView head = label("CUSTOM WALLPAPER", 13, RED, true);
+        head.setLetterSpacing(0.25f);
+        head.setPadding(0, 0, 0, dp(12));
+        m.addView(head);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        m.addView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        qrView = new QrView(this);
+        row.addView(qrView, new LinearLayout.LayoutParams(dp(250), dp(250)));
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(20), 0, 0, 0);
+        row.addView(col, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        col.addView(label("1. Phone and TV on the same Wi-Fi", 15, Color.WHITE, false));
+        TextView s2 = label("2. Scan the QR code with your phone camera, or open this address:", 15, Color.WHITE, false);
+        s2.setPadding(0, dp(6), 0, dp(6));
+        col.addView(s2);
+        wallUrl = label("", 17, RED, true);
+        col.addView(wallUrl);
+        TextView s3 = label("3. Choose image, move/zoom to crop, press Upload", 15, Color.WHITE, false);
+        s3.setPadding(0, dp(6), 0, dp(10));
+        col.addView(s3);
+        wallStatus = label("", 16, 0xFFFFFFFF, true);
+        col.addView(wallStatus);
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bl.topMargin = dp(16);
+        m.addView(btns, bl);
+
+        TextView next = btn("Next wallpaper", false);
+        next.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { nextWall(); }
+        });
+        btns.addView(next, tbLp());
+
+        TextView rm = btn("Remove custom", false);
+        rm.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                customFile.delete();
+                wallIdx = 0;
+                applyWall();
+                wallStatus.setText("Custom wallpaper removed");
+            }
+        });
+        btns.addView(rm, tbLp());
+
+        wallClose = btn("Close", true);
+        wallClose.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { closeWallPanel(); }
+        });
+        btns.addView(wallClose, tbLp());
+        return m;
+    }
+
+    private String localIp() {
+        try {
+            Enumeration<NetworkInterface> ifs = NetworkInterface.getNetworkInterfaces();
+            while (ifs != null && ifs.hasMoreElements()) {
+                NetworkInterface ni = ifs.nextElement();
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                Enumeration<InetAddress> as = ni.getInetAddresses();
+                while (as.hasMoreElements()) {
+                    InetAddress a = as.nextElement();
+                    if (a instanceof java.net.Inet4Address && !a.isLoopbackAddress()) {
+                        return a.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+        return null;
+    }
+
+    private void openWallPanel() {
+        hideMenu();
+        hideVol();
+        if (server == null) {
+            wallKey = String.valueOf(1000 + new Random().nextInt(9000));
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            server = new WallServer(customFile, wallKey, dm.widthPixels, dm.heightPixels,
+                    new WallServer.Listener() {
+                        public void onUploaded() {
+                            runOnUiThread(new Runnable() {
+                                public void run() {
+                                    wallIdx = 0;
+                                    prefs.edit().putInt("wall", 0).apply();
+                                    applyWall();
+                                    wallStatus.setText("Wallpaper updated!");
+                                }
+                            });
+                        }
+                    });
+            if (!server.start()) {
+                server = null;
+                toast("Cannot start the upload server");
+                return;
+            }
+        }
+        String ip = localIp();
+        if (ip == null) {
+            wallUrl.setText("No network found. Connect Wi-Fi first.");
+            qrView.set(null);
+        } else {
+            String url = "http://" + ip + ":" + server.port + "/?k=" + wallKey;
+            wallUrl.setText(url);
+            qrView.set(Qr.encode(url));
+        }
+        wallStatus.setText("Waiting for your phone...");
+        wallPanel.setVisibility(View.VISIBLE);
+        wallClose.requestFocus();
+    }
+
+    private void closeWallPanel() {
+        if (server != null) {
+            server.stop();
+            server = null;
+        }
+        if (wallPanel.getVisibility() == View.VISIBLE) {
+            wallPanel.setVisibility(View.GONE);
+            grid.requestFocus();
+        }
     }
 
     private void toggleVol() {
@@ -651,21 +845,53 @@ public class MainActivity extends Activity {
         applyWall();
     }
 
+    private boolean showCustom() {
+        try {
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(customFile.getPath(), o);
+            int sample = 1;
+            while (o.outWidth / (sample * 2) >= 2000) sample *= 2;
+            BitmapFactory.Options o2 = new BitmapFactory.Options();
+            o2.inSampleSize = sample;
+            Bitmap bmp = BitmapFactory.decodeFile(customFile.getPath(), o2);
+            if (bmp == null) return false;
+            wall.setImageBitmap(bmp);
+            shade.setBackgroundColor(0x44000000);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private void applyWall() {
+        boolean hasCustom = customFile.exists();
         int img = imageWallId();
         boolean hasImg = img != 0;
-        int n = PRESETS.length + (hasImg ? 1 : 0);
-        int idx = ((wallIdx % n) + n) % n;
-        if (hasImg && idx == 0) {
-            try {
-                wall.setImageDrawable(getResources().getDrawable(img, getTheme()));
-                shade.setBackgroundColor(0x77000000);
-                return;
-            } catch (Exception e) {
-                idx = 1;
+        int n = PRESETS.length + (hasCustom ? 1 : 0) + (hasImg ? 1 : 0);
+        int k = ((wallIdx % n) + n) % n;
+        if (hasCustom) {
+            if (k == 0) {
+                if (showCustom()) return;
+            } else {
+                k--;
             }
         }
-        int[] c = PRESETS[idx - (hasImg ? 1 : 0)];
+        if (hasImg) {
+            if (k == 0) {
+                try {
+                    wall.setImageDrawable(getResources().getDrawable(img, getTheme()));
+                    shade.setBackgroundColor(0x77000000);
+                    return;
+                } catch (Exception e) {
+                    // fall through to gradient
+                }
+            } else {
+                k--;
+            }
+        }
+        if (k < 0 || k >= PRESETS.length) k = 0;
+        int[] c = PRESETS[k];
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
         GradientDrawable g = new GradientDrawable();
         g.setGradientType(GradientDrawable.RADIAL_GRADIENT);
@@ -861,6 +1087,7 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         hideMenu();
         if (volPanel != null) hideVol();
+        if (wallPanel != null) closeWallPanel();
         if (grid != null) {
             grid.setSelection(0);
             grid.requestFocus();
@@ -878,7 +1105,8 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (volPanel.getVisibility() == View.VISIBLE) hideVol();
+        if (wallPanel.getVisibility() == View.VISIBLE) closeWallPanel();
+        else if (volPanel.getVisibility() == View.VISIBLE) hideVol();
         else hideMenu(); // a launcher never closes
     }
 
@@ -900,6 +1128,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         destroyed = true;
         h.removeCallbacksAndMessages(null);
+        if (server != null) server.stop();
         try {
             unregisterReceiver(pkgReceiver);
             unregisterReceiver(volReceiver);
