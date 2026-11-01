@@ -1,7 +1,6 @@
 package com.viral.launcher;
 
 import android.app.Activity;
-import android.app.ActivityOptions;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -15,7 +14,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -34,6 +32,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.WebChromeClient;
 import android.widget.AbsListView;
 import android.widget.AdapterView;
 import android.widget.BaseAdapter;
@@ -116,10 +115,11 @@ public class MainActivity extends Activity {
     private QrView qrView;
     private TextView wallUrl, wallStatus, wallClose;
 
-    // window mode (apps open as floating windows when the box supports it)
-    private boolean windowMode = false;
-    private int winNext = 0;
-    private TextView winItem;
+    // web windows (YouTube, Google, ... inside draggable windows on the desktop)
+    private static final String SITE_URL = "https://www.google.com/search?q=Viral+Quality";
+    private FrameLayout desk, fsHost;
+    private LinearLayout tabsBox;
+    private final List<WebWindow> wins = new ArrayList<>();
 
     private boolean destroyed = false;
 
@@ -375,7 +375,6 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("vq", MODE_PRIVATE);
         customFile = new File(getFilesDir(), "custom_wall.jpg");
         wallIdx = prefs.getInt("wall", 0);
-        windowMode = prefs.getBoolean("winmode", false);
         applyTz(prefs.getString("tz", ""));
 
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
@@ -397,7 +396,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // desktop area: only the wallpaper and the animated clock
-        FrameLayout desk = new FrameLayout(this);
+        desk = new FrameLayout(this);
         col.addView(desk, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         desk.addView(buildClockBlock(dm), clockLp());
@@ -432,6 +431,12 @@ public class MainActivity extends Activity {
                 dp(640), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         root.addView(wallPanel, wpl);
         wallPanel.setVisibility(View.GONE);
+
+        fsHost = new FrameLayout(this);
+        fsHost.setBackgroundColor(0xFF000000);
+        root.addView(fsHost, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        fsHost.setVisibility(View.GONE);
 
         setContentView(root);
         applyWall();
@@ -486,7 +491,7 @@ public class MainActivity extends Activity {
         LinearLayout t = new LinearLayout(this);
         t.setOrientation(LinearLayout.HORIZONTAL);
         t.setGravity(Gravity.CENTER_VERTICAL);
-        t.setPadding(dp(14), 0, dp(20), 0);
+        t.setPadding(dp(14), 0, dp(36), 0);
         t.setBackgroundColor(0xE60A0A0E);
 
         startBtn = btn("■  START", true);
@@ -500,11 +505,18 @@ public class MainActivity extends Activity {
             t.addView(slots[i], tbLp());
         }
 
+        tabsBox = new LinearLayout(this);
+        tabsBox.setOrientation(LinearLayout.HORIZONTAL);
+        t.addView(tabsBox, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         View sp = new View(this);
         t.addView(sp, new LinearLayout.LayoutParams(0, 1, 1f));
 
         trayWx = label("", 15, 0xCCFFFFFF, false);
-        trayWx.setPadding(0, 0, dp(22), 0);
+        trayWx.setPadding(0, 0, dp(14), 0);
+        trayWx.setSingleLine(true);
+        trayWx.setMaxWidth(dp(150));
         t.addView(trayWx);
         spk = new SpeakerView(this);
         spk.setOnClickListener(new View.OnClickListener() {
@@ -525,6 +537,112 @@ public class MainActivity extends Activity {
         return p;
     }
 
+    // ---------- web windows ----------
+
+    private final WebWindow.Host winHost = new WebWindow.Host() {
+        public void onWindowChanged() { refreshTabs(); }
+
+        public void onWindowClosed(WebWindow w) {
+            wins.remove(w);
+            refreshTabs();
+        }
+
+        public void onFullscreenVideo(View v, WebChromeClient.CustomViewCallback cb) {
+            fsView = v;
+            fsCb = cb;
+            fsHost.removeAllViews();
+            fsHost.addView(v, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            fsHost.setVisibility(View.VISIBLE);
+        }
+
+        public void onFullscreenVideoEnd() {
+            fsHost.removeAllViews();
+            fsHost.setVisibility(View.GONE);
+            fsView = null;
+            fsCb = null;
+        }
+    };
+
+    private View fsView;
+    private WebChromeClient.CustomViewCallback fsCb;
+
+    private void openWeb(String name, String url) {
+        hideStart();
+        for (WebWindow w : wins) {
+            if (w.name.equals(name)) {
+                w.show();
+                return;
+            }
+        }
+        if (wins.size() >= 2) {
+            WebWindow old = wins.get(0);
+            String n = old.name;
+            old.close();
+            toast("Maximum 2 windows: closed " + n);
+        }
+        boolean used0 = false;
+        for (WebWindow w : wins) if (w.slot == 0) used0 = true;
+        int slot = used0 ? 1 : 0;
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        int dw = desk.getWidth() > 0 ? desk.getWidth() : dm.widthPixels;
+        int dh = desk.getHeight() > 0 ? desk.getHeight() : dm.heightPixels - dp(64);
+        int pad = dp(10);
+        int w = (dw - pad * 3) / 2, hgt = dh - pad * 2;
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, hgt);
+        lp.leftMargin = slot == 0 ? pad : pad * 2 + w;
+        lp.topMargin = pad;
+        try {
+            WebWindow win = new WebWindow(this, name, url, winHost, slot);
+            desk.addView(win, lp);
+            wins.add(win);
+        } catch (Throwable t) {
+            toast("Web view is not available on this box");
+        }
+        refreshTabs();
+    }
+
+    private WebWindow topWindow() {
+        WebWindow top = null;
+        int best = -1;
+        for (WebWindow w : wins) {
+            if (w.minimized) continue;
+            int i = desk.indexOfChild(w);
+            if (i > best) {
+                best = i;
+                top = w;
+            }
+        }
+        return top;
+    }
+
+    private void refreshTabs() {
+        if (tabsBox == null) return;
+        tabsBox.removeAllViews();
+        WebWindow top = topWindow();
+        for (final WebWindow w : wins) {
+            TextView t = btn(w.name, w == top);
+            t.setPadding(dp(12), 0, dp(12), 0);
+            t.setSingleLine(true);
+            t.setMaxWidth(dp(110));
+            t.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    if (w.minimized) w.show();
+                    else if (w == topWindow()) w.minimize();
+                    else w.bringToFront();
+                    refreshTabs();
+                }
+            });
+            t.setOnLongClickListener(new View.OnLongClickListener() {
+                public boolean onLongClick(View v) {
+                    w.close();
+                    return true;
+                }
+            });
+            tabsBox.addView(t, tbLp());
+        }
+    }
+
     // ---------- pinned apps ----------
 
     private LinearLayout makeSlot(final int i) {
@@ -541,7 +659,7 @@ public class MainActivity extends Activity {
         TextView tv = label("+ Add app", 15, Color.WHITE, true);
         tv.setSingleLine(true);
         tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        tv.setMaxWidth(dp(150));
+        tv.setMaxWidth(dp(100));
         tv.setPadding(dp(8), 0, 0, 0);
         s.addView(tv);
         s.setOnClickListener(new View.OnClickListener() {
@@ -603,16 +721,12 @@ public class MainActivity extends Activity {
         head.setLetterSpacing(0.25f);
         head.setPadding(dp(8), dp(2), 0, dp(10));
         left.addView(head);
-        winItem = addMenu(left, windowLabel(), new Runnable() {
-            public void run() {
-                windowMode = !windowMode;
-                prefs.edit().putBoolean("winmode", windowMode).apply();
-                winItem.setText(windowLabel());
-                toast(windowMode
-                        ? "Window mode ON: apps open in windows (needs freeform support)"
-                        : "Window mode OFF: apps open full screen");
-            }
-        });
+        section(left, "WEB WINDOWS");
+        addMenu(left, "YouTube", new Runnable() { public void run() { openWeb("YouTube", "https://m.youtube.com"); } });
+        addMenu(left, "Google", new Runnable() { public void run() { openWeb("Google", "https://www.google.com"); } });
+        addMenu(left, "Facebook", new Runnable() { public void run() { openWeb("Facebook", "https://m.facebook.com"); } });
+        addMenu(left, "Viral Quality", new Runnable() { public void run() { openWeb("Viral Quality", SITE_URL); } });
+        section(left, "SYSTEM");
         addMenu(left, "Settings", new Runnable() { public void run() { openSettings(Settings.ACTION_SETTINGS); } });
         addMenu(left, "Wi-Fi / Network", new Runnable() { public void run() { openSettings(Settings.ACTION_WIFI_SETTINGS); } });
         addMenu(left, "Display", new Runnable() { public void run() { openSettings(Settings.ACTION_DISPLAY_SETTINGS); } });
@@ -707,8 +821,11 @@ public class MainActivity extends Activity {
         return p;
     }
 
-    private String windowLabel() {
-        return "Window mode: " + (windowMode ? "ON" : "OFF");
+    private void section(LinearLayout m, String text) {
+        TextView t = label(text, 11, RED, true);
+        t.setLetterSpacing(0.2f);
+        t.setPadding(dp(8), dp(8), 0, dp(6));
+        m.addView(t);
     }
 
     private TextView addMenu(LinearLayout m, String text, final Runnable r) {
@@ -1173,31 +1290,13 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private Bundle windowOptions() {
-        if (!windowMode || Build.VERSION.SDK_INT < 24) return null;
-        try {
-            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            int w = dm.widthPixels, hgt = dm.heightPixels;
-            int top = (int) (hgt * 0.04f), bottom = hgt - dp(80);
-            Rect r = (winNext % 2 == 0)
-                    ? new Rect((int) (w * 0.02f), top, (int) (w * 0.49f), bottom)
-                    : new Rect((int) (w * 0.51f), top, (int) (w * 0.98f), bottom);
-            winNext++;
-            ActivityOptions ao = ActivityOptions.makeBasic();
-            ao.setLaunchBounds(r);
-            return ao.toBundle();
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
     private void launch(AppItem a) {
         try {
             Intent i = new Intent(Intent.ACTION_MAIN);
             i.addCategory(Intent.CATEGORY_LAUNCHER);
             i.setClassName(a.pkg, a.cls);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-            startActivity(i, windowOptions());
+            startActivity(i);
         } catch (Exception e) {
             try {
                 Intent i = getPackageManager().getLaunchIntentForPackage(a.pkg);
@@ -1347,12 +1446,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        for (WebWindow w : wins) w.resumeWeb();
         h.removeCallbacks(tick);
         h.post(tick);
     }
 
     @Override
     protected void onStop() {
+        for (WebWindow w : wins) w.pauseWeb();
         h.removeCallbacks(tick);
         super.onStop();
     }
@@ -1383,6 +1484,17 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (fsView != null) {
+            if (fsCb != null) fsCb.onCustomViewHidden();
+            winHost.onFullscreenVideoEnd();
+            return;
+        }
+        WebWindow top = topWindow();
+        if (startPanel.getVisibility() != View.VISIBLE && wallPanel.getVisibility() != View.VISIBLE
+                && volPanel.getVisibility() != View.VISIBLE && top != null && top.canGoBack()) {
+            top.goBack();
+            return;
+        }
         if (wallPanel.getVisibility() == View.VISIBLE) closeWallPanel();
         else if (volPanel.getVisibility() == View.VISIBLE) hideVol();
         else hideStart(); // a launcher never closes
