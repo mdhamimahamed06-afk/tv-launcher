@@ -128,7 +128,7 @@ public class MainActivity extends Activity {
     private TextView wallUrl, wallStatus, wallClose;
 
     // web windows (YouTube, Google, ... inside draggable windows on the desktop)
-    private static final String SITE_URL = "https://www.google.com/search?q=Viral+Quality";
+    private static final String SITE_URL = "https://viralquality.blogspot.com";
     private FrameLayout desk, fsHost;
     private View clockBlock;
     private LinearLayout webBox;
@@ -176,6 +176,7 @@ public class MainActivity extends Activity {
                 bigTime.setText(fBig.format(d));
                 bigDate.setText(fDate.format(d));
                 trayClock.setText(fTray.format(d));
+                if (locked) lockTime.setText(fBig.format(d) + "\n" + fDate.format(d));
             }
             if (slideOn) {
                 long now = System.currentTimeMillis();
@@ -553,6 +554,9 @@ public class MainActivity extends Activity {
         t.setBackgroundColor(prefs.getBoolean("glass", false) ? 0x990A0A0E : 0xE60A0A0E);
         taskbarView = t;
 
+        tbLead = new View(this);
+        t.addView(tbLead, new LinearLayout.LayoutParams(0, 1, prefs.getBoolean("tbleft", false) ? 0f : 1f));
+
         startBtn = btn("■  START", true);
         startBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { toggleStart(); }
@@ -704,6 +708,10 @@ public class MainActivity extends Activity {
             WebWindow win = new WebWindow(this, name, url, content, winHost, slot);
             desk.addView(win, lp);
             wins.add(win);
+            win.setAlpha(0f);
+            win.setScaleX(0.93f);
+            win.setScaleY(0.93f);
+            win.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(200).start();
         } catch (Throwable t) {
             toast("Could not open window");
         }
@@ -764,12 +772,13 @@ public class MainActivity extends Activity {
 
     // ---------- desktop extras ----------
 
+    private View tbLead;
     private LinearLayout iconsBox, ctxMenu, searchPanel, searchResults, calPanel, calGrid, taskbarView;
     private FrameLayout ctxLayer, lockView;
     private EditText searchEt;
-    private TextView calTitle, lockTitle, lockDots;
+    private TextView calTitle, lockMsg, lockName, lockAvatar, lockTime;
+    private EditText lockEt;
     private final Calendar calShown = Calendar.getInstance();
-    private String lockEntry = "";
     private boolean locked = false;
     private boolean slideOn = false;
     private long lastSlide = 0;
@@ -891,6 +900,12 @@ public class MainActivity extends Activity {
         lastSlide = 0;
         prefs.edit().putBoolean("slide", slideOn).apply();
         toast(slideOn ? "Wallpaper changes every 5 minutes" : "Slideshow off");
+    }
+
+    private void toggleAlign() {
+        boolean left = !prefs.getBoolean("tbleft", false);
+        prefs.edit().putBoolean("tbleft", left).apply();
+        tbLead.setLayoutParams(new LinearLayout.LayoutParams(0, 1, left ? 0f : 1f));
     }
 
     private void toggleGlass() {
@@ -1020,36 +1035,68 @@ public class MainActivity extends Activity {
         root.addView(calPanel, cpl);
         calPanel.setVisibility(View.GONE);
 
-        // lock screen (always on top)
+        // lock screen (always on top): profile + password, like Windows
         lockView = new FrameLayout(this);
-        lockView.setBackgroundColor(0xFA000000);
+        lockView.setBackgroundColor(0xE6000000);
         lockView.setClickable(true);
+
+        lockTime = label("", 40, Color.WHITE, false);
+        lockTime.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
+        lockTime.setGravity(Gravity.CENTER);
+        lockTime.setShadowLayer(dp(4), 0, dp(1), 0xAA000000);
+        FrameLayout.LayoutParams ltl = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        ltl.topMargin = dp(28);
+        lockView.addView(lockTime, ltl);
+
         LinearLayout lb = new LinearLayout(this);
         lb.setOrientation(LinearLayout.VERTICAL);
         lb.setGravity(Gravity.CENTER_HORIZONTAL);
-        lockTitle = label("Enter PIN", 20, Color.WHITE, true);
-        lb.addView(lockTitle);
-        lockDots = label(" ", 30, RED, true);
-        lockDots.setLetterSpacing(0.3f);
-        lockDots.setPadding(0, dp(10), 0, dp(14));
-        lb.addView(lockDots);
-        String[][] keys = {{"1", "2", "3"}, {"4", "5", "6"}, {"7", "8", "9"}, {"CLR", "0", "OK"}};
-        for (String[] r : keys) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            for (final String k : r) {
-                TextView b = btn(k, false);
-                b.setGravity(Gravity.CENTER);
-                b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-                b.setOnClickListener(new View.OnClickListener() {
-                    public void onClick(View v) { lockKey(k); }
-                });
-                LinearLayout.LayoutParams kl = new LinearLayout.LayoutParams(dp(84), dp(54));
-                kl.setMargins(dp(4), dp(4), dp(4), dp(4));
-                row.addView(b, kl);
+
+        lockAvatar = label("V", 44, Color.WHITE, true);
+        lockAvatar.setGravity(Gravity.CENTER);
+        GradientDrawable av = glass(RED, 0x88FFFFFF, 48, 2);
+        lockAvatar.setBackground(av);
+        lb.addView(lockAvatar, new LinearLayout.LayoutParams(dp(96), dp(96)));
+
+        lockName = label("", 22, Color.WHITE, true);
+        LinearLayout.LayoutParams nl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nl.topMargin = dp(12);
+        nl.bottomMargin = dp(14);
+        lb.addView(lockName, nl);
+
+        lockEt = new EditText(this);
+        lockEt.setSingleLine(true);
+        lockEt.setTextColor(Color.WHITE);
+        lockEt.setHintTextColor(0x99FFFFFF);
+        lockEt.setHint("Password");
+        lockEt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        lockEt.setPadding(dp(14), 0, dp(14), 0);
+        lockEt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        lockEt.setImeOptions(EditorInfo.IME_ACTION_GO);
+        lockEt.setBackground(glass(0xFF26262E, 0x66FFFFFF, 10, 1));
+        lockEt.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            public boolean onEditorAction(TextView v, int id, KeyEvent e) {
+                tryUnlock();
+                return true;
             }
-            lb.addView(row);
-        }
+        });
+        lb.addView(lockEt, new LinearLayout.LayoutParams(dp(300), dp(48)));
+
+        TextView go = btn("Sign in", true);
+        go.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { tryUnlock(); }
+        });
+        LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(dp(300), dp(46));
+        gl.topMargin = dp(10);
+        lb.addView(go, gl);
+
+        lockMsg = label(" ", 14, 0xFFFF8A8A, false);
+        lockMsg.setPadding(0, dp(10), 0, 0);
+        lb.addView(lockMsg);
+
         lockView.addView(lb, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
         root.addView(lockView, new FrameLayout.LayoutParams(
@@ -1213,9 +1260,14 @@ public class MainActivity extends Activity {
 
     // ----- lock screen, PIN, startup site
 
+    private String userName() {
+        String n = prefs.getString("uname", "Viral Quality");
+        return n.length() == 0 ? "Viral Quality" : n;
+    }
+
     private void lockFromMenu() {
         if (prefs.getString("pin", "").length() == 0) {
-            toast("Set a PIN first (START > Set / change PIN)");
+            toast("Set a password first (START > Account & password)");
             return;
         }
         lockNow();
@@ -1223,69 +1275,84 @@ public class MainActivity extends Activity {
 
     private void lockNow() {
         locked = true;
-        lockEntry = "";
-        lockTitle.setText("Enter PIN");
-        updateDots();
+        String n = userName();
+        lockName.setText(n);
+        lockAvatar.setText(n.substring(0, 1).toUpperCase(Locale.ENGLISH));
+        lockMsg.setText(" ");
+        lockEt.setText("");
+        Date d = new Date();
+        lockTime.setText(fBig.format(d) + "\n" + fDate.format(d));
         closeAllPanels();
         hideStart();
         lockView.setVisibility(View.VISIBLE);
         lockView.bringToFront();
-        lockView.getChildAt(0).requestFocus();
-    }
-
-    private void updateDots() {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < lockEntry.length(); i++) sb.append("\u25CF");
-        lockDots.setText(sb.length() == 0 ? " " : sb.toString());
-    }
-
-    private void lockKey(String k) {
-        String pin = prefs.getString("pin", "");
-        if (k.equals("CLR")) {
-            lockEntry = "";
-        } else if (k.equals("OK")) {
-            tryUnlock();
-            return;
-        } else if (lockEntry.length() < 8) {
-            lockEntry += k;
-            lockTitle.setText("Enter PIN");
-        }
-        updateDots();
-        if (pin.length() > 0 && lockEntry.length() == pin.length()) tryUnlock();
+        lockEt.requestFocus();
+        h.postDelayed(new Runnable() {
+            public void run() {
+                try {
+                    ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(lockEt, 0);
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
+        }, 300);
     }
 
     private void tryUnlock() {
-        if (lockEntry.equals(prefs.getString("pin", ""))) {
+        String pw = prefs.getString("pin", "");
+        if (lockEt.getText().toString().equals(pw)) {
             locked = false;
-            lockEntry = "";
             lockView.setVisibility(View.GONE);
+            try {
+                ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+                        .hideSoftInputFromWindow(lockEt.getWindowToken(), 0);
+            } catch (Exception e) {
+                // ignore
+            }
+            lockEt.setText("");
             runStartup();
         } else {
-            lockTitle.setText("Wrong PIN");
-            lockEntry = "";
-            updateDots();
+            lockMsg.setText("The password is incorrect. Try again.");
+            lockEt.setText("");
         }
     }
 
     private void pinDialog() {
-        final EditText et = new EditText(this);
-        et.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        et.setHint("4 to 8 digits (empty = remove PIN)");
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(10), dp(20), 0);
+        final EditText nameEt = new EditText(this);
+        nameEt.setSingleLine(true);
+        nameEt.setHint("Account name");
+        nameEt.setText(userName());
+        box.addView(nameEt);
+        final EditText pwEt = new EditText(this);
+        pwEt.setSingleLine(true);
+        pwEt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        pwEt.setHint(prefs.getString("pin", "").length() > 0 ? "New password (empty = keep current)" : "Password (min 4 characters)");
+        box.addView(pwEt);
         new AlertDialog.Builder(this)
-                .setTitle("Lock screen PIN")
-                .setView(et)
+                .setTitle("Account & password")
+                .setView(box)
                 .setPositiveButton("Save", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) {
-                        String p = et.getText().toString().trim();
+                        String n = nameEt.getText().toString().trim();
+                        if (n.length() > 0) prefs.edit().putString("uname", n).apply();
+                        String p = pwEt.getText().toString();
                         if (p.length() == 0) {
-                            prefs.edit().remove("pin").apply();
-                            toast("PIN removed");
-                        } else if (p.length() < 4 || p.length() > 8) {
-                            toast("Use 4 to 8 digits");
+                            toast("Saved");
+                        } else if (p.length() < 4) {
+                            toast("Password needs at least 4 characters");
                         } else {
                             prefs.edit().putString("pin", p).apply();
-                            toast("PIN saved");
+                            toast("Password saved");
                         }
+                    }
+                })
+                .setNeutralButton("Remove password", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        prefs.edit().remove("pin").apply();
+                        toast("Password removed");
                     }
                 })
                 .setNegativeButton("Cancel", null)
@@ -1433,9 +1500,10 @@ public class MainActivity extends Activity {
         addMenu(left, "Wallpaper slideshow on / off", () -> toggleSlide());
         addMenu(left, "Accent color (next)", () -> nextAccent());
         addMenu(left, "Taskbar glass / solid", () -> toggleGlass());
+        addMenu(left, "Taskbar center / left", () -> toggleAlign());
         addMenu(left, "Startup site...", () -> startupDialog());
         addMenu(left, "Lock screen now", () -> lockFromMenu());
-        addMenu(left, "Set / change PIN", () -> pinDialog());
+        addMenu(left, "Account & password", () -> pinDialog());
         section(left, "SYSTEM");
         addMenu(left, "Settings", new Runnable() { public void run() { openSettings(Settings.ACTION_SETTINGS); } });
         addMenu(left, "Wi-Fi / Network", new Runnable() { public void run() { openSettings(Settings.ACTION_WIFI_SETTINGS); } });
@@ -1569,7 +1637,10 @@ public class MainActivity extends Activity {
         } else {
             pinBanner.setVisibility(View.GONE);
         }
+        startPanel.setAlpha(0f);
+        startPanel.setTranslationY(dp(40));
         startPanel.setVisibility(View.VISIBLE);
+        startPanel.animate().alpha(1f).translationY(0f).setDuration(200).start();
         grid.setSelection(0);
         grid.requestFocus();
     }
@@ -1577,6 +1648,7 @@ public class MainActivity extends Activity {
     private void hideStart() {
         pinSlot = -1;
         if (startPanel.getVisibility() == View.VISIBLE) {
+            startPanel.animate().cancel();
             startPanel.setVisibility(View.GONE);
             startBtn.requestFocus();
         }
@@ -2187,11 +2259,6 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
         if (locked) {
-            int dgt = -1;
-            if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) dgt = keyCode - KeyEvent.KEYCODE_0;
-            else if (keyCode >= KeyEvent.KEYCODE_NUMPAD_0 && keyCode <= KeyEvent.KEYCODE_NUMPAD_9) dgt = keyCode - KeyEvent.KEYCODE_NUMPAD_0;
-            if (dgt >= 0) { lockKey("" + dgt); return true; }
-            if (keyCode == KeyEvent.KEYCODE_DEL) { lockKey("CLR"); return true; }
             if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_BACK) return true;
             return super.onKeyDown(keyCode, e);
         }

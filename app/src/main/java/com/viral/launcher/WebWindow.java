@@ -63,6 +63,7 @@ final class WebWindow extends FrameLayout {
 
         setBackground(box(0xFF101015, 0x88FFFFFF, 10, 1));
         setPadding(dp(1), dp(1), dp(1), dp(1));
+        setElevation(dp(14));
 
         LinearLayout col = new LinearLayout(ctx);
         col.setOrientation(LinearLayout.VERTICAL);
