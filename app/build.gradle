@@ -10,7 +10,7 @@ android {
         applicationId "com.viral.launcher"
         minSdk 21
         targetSdk 28
-        versionCode (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
+        versionCode Integer.parseInt(System.getenv("GITHUB_RUN_NUMBER") ?: "1")
         versionName "1.0"
     }
 
