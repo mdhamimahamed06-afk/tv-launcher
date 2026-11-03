@@ -50,6 +50,11 @@ final class WebWindow extends FrameLayout {
     private TextView bDesk;
     private boolean desktop = false;
     private String mobileUa = "";
+    static final String H264_JS = "(function(){try{var re=/vp9|vp09|av01|av1/i;"
+            + "if(window.MediaSource&&MediaSource.isTypeSupported){var o=MediaSource.isTypeSupported.bind(MediaSource);"
+            + "MediaSource.isTypeSupported=function(t){return re.test(t)?false:o(t);};}"
+            + "var c=HTMLMediaElement.prototype.canPlayType;"
+            + "HTMLMediaElement.prototype.canPlayType=function(t){return re.test(t)?'':c.call(this,t);};}catch(e){}})();";
     static final String DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
     private int rl, rt, rw, rh;
 
@@ -65,7 +70,6 @@ final class WebWindow extends FrameLayout {
 
         setBackground(box(0xFF101015, 0x88FFFFFF, 10, 1));
         setPadding(dp(1), dp(1), dp(1), dp(1));
-        setElevation(dp(14));
 
         LinearLayout col = new LinearLayout(ctx);
         col.setOrientation(LinearLayout.VERTICAL);
@@ -219,6 +223,8 @@ final class WebWindow extends FrameLayout {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        web.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
         s.setBuiltInZoomControls(true);
@@ -233,6 +239,14 @@ final class WebWindow extends FrameLayout {
             @Override
             public void onPageStarted(WebView v, String u, android.graphics.Bitmap b) {
                 if (u != null && !addr.hasFocus() && !u.startsWith("about:")) addr.setText(u);
+                // ask YouTube for H.264 only: cheap boxes decode it in hardware, VP9/AV1 would be software (laggy)
+                if (u != null && (u.contains("youtube.com") || u.contains("youtu.be"))) {
+                    try {
+                        v.evaluateJavascript(H264_JS, null);
+                    } catch (Throwable t) {
+                        // ignore
+                    }
+                }
             }
 
             @Override

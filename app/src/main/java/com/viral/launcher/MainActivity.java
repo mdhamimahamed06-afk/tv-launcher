@@ -208,8 +208,9 @@ public class MainActivity extends Activity {
                     nextWall();
                 }
             }
-            clockView.invalidate();
-            h.postDelayed(this, 40);
+            boolean smooth = clockStyle == 1 && clockBlock.getVisibility() == View.VISIBLE && topWindow() == null;
+            if (smooth) clockView.invalidate();
+            h.postDelayed(this, smooth ? 40 : 250);
         }
     };
 
