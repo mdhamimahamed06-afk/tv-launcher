@@ -3,6 +3,9 @@ package com.viral.launcher;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.app.DownloadManager;
+import android.webkit.CookieManager;
+import android.webkit.URLUtil;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.os.Environment;
@@ -527,6 +530,7 @@ public class MainActivity extends Activity {
             }
         };
         clipMgr.addPrimaryClipChangedListener(clipL);
+        registerReceiver(dlReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
 
         setContentView(root);
         if (!booted) {
@@ -877,6 +881,10 @@ public class MainActivity extends Activity {
             fsHost.setVisibility(View.VISIBLE);
         }
 
+        public void onDownload(String url, String ua, String cd, String mime) {
+            startDownload(url, ua, URLUtil.guessFileName(url, cd, mime), mime, false);
+        }
+
         public void onSaveSite(String name, String url) {
             String old = prefs.getString("sites", "");
             if (old.contains("\t" + url + "\n")) {
@@ -1057,6 +1065,7 @@ public class MainActivity extends Activity {
             case KeyEvent.KEYCODE_D: showDesktop(); return true;
             case KeyEvent.KEYCODE_W: closeTop(); return true;
             case KeyEvent.KEYCODE_TAB: cycleWindows(); return true;
+            case KeyEvent.KEYCODE_U: updateLauncher(); return true;
             default: return false;
         }
     }
@@ -1068,7 +1077,8 @@ public class MainActivity extends Activity {
                         + "Y YouTube    G Google    F Facebook    B New browser\n"
                         + "E Files    N Notepad    C Calculator    M Task manager\n"
                         + "V Clipboard    T Timer    S Search    L Lock\n"
-                        + "D Show desktop    W Close window    Tab Switch window\n\n"
+                        + "D Show desktop    W Close window    Tab Switch window\n"
+                        + "U Update launcher\n\n"
                         + "Ctrl+T new browser, Ctrl+W close, Ctrl+Tab switch\n"
                         + "Ctrl+Shift+Esc Task manager\n"
                         + "Win key alone = START    Esc = close menus\n"
@@ -1948,6 +1958,7 @@ public class MainActivity extends Activity {
         addMenu(left, "Account & password", () -> pinDialog());
         addMenu(left, "Profile picture (QR)", () -> openWallPanel(true));
         section(left, "SYSTEM");
+        addMenu(left, "Update launcher (latest)", () -> updateLauncher());
         addMenu(left, "Settings", new Runnable() { public void run() { openSettings(Settings.ACTION_SETTINGS); } });
         addMenu(left, "Wi-Fi / Network", new Runnable() { public void run() { openSettings(Settings.ACTION_WIFI_SETTINGS); } });
         addMenu(left, "Display", new Runnable() { public void run() { openSettings(Settings.ACTION_DISPLAY_SETTINGS); } });
@@ -2697,6 +2708,9 @@ public class MainActivity extends Activity {
         super.onResume();
         VolumeService.setHome(true);
         ensureOverlay(false);
+        if (pendingApk != null && (Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls())) {
+            installApk(pendingApk);
+        }
     }
 
     @Override
@@ -2731,6 +2745,93 @@ public class MainActivity extends Activity {
     }
 
     private boolean metaCombo = false;
+
+    // ----- downloads and one-click launcher update
+
+    private static final String UPDATE_URL =
+            "https://github.com/mdhamimahamed06-afk/tv-launcher/releases/latest/download/VQLauncher.apk";
+    private DownloadManager dlm;
+    private final Map<Long, String> dlNames = new HashMap<>();
+    private Uri pendingApk;
+
+    private final BroadcastReceiver dlReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            long id = i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+            String name = dlNames.remove(id);
+            if (name == null || dlm == null) return;
+            boolean ok = false;
+            android.database.Cursor cu = dlm.query(new DownloadManager.Query().setFilterById(id));
+            if (cu != null) {
+                if (cu.moveToFirst()) {
+                    ok = cu.getInt(cu.getColumnIndex(DownloadManager.COLUMN_STATUS)) == DownloadManager.STATUS_SUCCESSFUL;
+                }
+                cu.close();
+            }
+            if (!ok) {
+                toast("Download failed: " + name);
+                return;
+            }
+            Uri u = dlm.getUriForDownloadedFile(id);
+            if (name.toLowerCase(Locale.ENGLISH).endsWith(".apk") && u != null) installApk(u);
+            else toast("Downloaded: " + name + " (see Files > Download)");
+        }
+    };
+
+    private void startDownload(String url, String ua, String name, String mime, boolean priv) {
+        try {
+            if (dlm == null) dlm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
+            if (ua != null) r.addRequestHeader("User-Agent", ua);
+            String ck = CookieManager.getInstance().getCookie(url);
+            if (ck != null) r.addRequestHeader("Cookie", ck);
+            if (mime != null && mime.length() > 0) r.setMimeType(mime);
+            r.setTitle(name);
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            boolean pub = !priv && (Build.VERSION.SDK_INT < 23
+                    || checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED);
+            if (pub) {
+                r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
+            } else {
+                new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), name).delete();
+                r.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, name);
+            }
+            long id = dlm.enqueue(r);
+            dlNames.put(id, name);
+            toast("Downloading " + name + " ...");
+        } catch (Throwable t) {
+            toast("Download failed");
+        }
+    }
+
+    private void updateLauncher() {
+        toast("Downloading the latest launcher (about 1 minute)...");
+        startDownload(UPDATE_URL, null, "VQLauncher.apk", "application/vnd.android.package-archive", true);
+    }
+
+    private void installApk(Uri u) {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            pendingApk = u;
+            toast("Turn ON \"Allow from this source\" for VQ Launcher, then press Back");
+            try {
+                Intent s = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+                s.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(s);
+            } catch (Throwable t) {
+                toast("Open Settings > Apps > Special access > Install unknown apps");
+            }
+            return;
+        }
+        pendingApk = null;
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(u, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(i);
+        } catch (Throwable t) {
+            toast("Cannot open the installer");
+        }
+    }
     private ClipboardManager clipMgr;
     private ClipboardManager.OnPrimaryClipChangedListener clipL;
 
@@ -2839,6 +2940,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        try {
+            unregisterReceiver(dlReceiver);
+        } catch (Throwable x) {
+            // ignore
+        }
         try {
             clipMgr.removePrimaryClipChangedListener(clipL);
         } catch (Throwable x) {

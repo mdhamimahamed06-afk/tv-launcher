@@ -15,6 +15,7 @@ import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.view.View;
 import android.view.ViewGroup;
+import android.webkit.DownloadListener;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -32,6 +33,7 @@ final class WebWindow extends FrameLayout {
         void onFullscreenVideo(View v, WebChromeClient.CustomViewCallback cb);
         void onFullscreenVideoEnd();
         void onSaveSite(String name, String url);
+        void onDownload(String url, String ua, String cd, String mime);
     }
 
     static int RED = 0xFFE11D2E;
@@ -258,6 +260,11 @@ final class WebWindow extends FrameLayout {
             public boolean onTouch(View v, MotionEvent e) {
                 if (e.getActionMasked() == MotionEvent.ACTION_DOWN) bringToFront();
                 return false;
+            }
+        });
+        web.setDownloadListener(new DownloadListener() {
+            public void onDownloadStart(String u, String ua, String cd, String mime, long len) {
+                WebWindow.this.host.onDownload(u, ua, cd, mime);
             }
         });
         col.addView(web, new LinearLayout.LayoutParams(
