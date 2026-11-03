@@ -12,6 +12,8 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -34,12 +36,17 @@ import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.MimeTypeMap;
 import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.SeekBar;
+import android.widget.VideoView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
@@ -47,6 +54,12 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -409,18 +422,63 @@ final class Tools {
 
     // ------------------------------------------------------------ File manager
 
+    interface Opener { boolean open(File f); }
+
+    private static File fileClip;
+    private static boolean fileClipMove;
+
+    static boolean isImage(String n) {
+        n = n.toLowerCase(Locale.ENGLISH);
+        return n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.endsWith(".gif")
+                || n.endsWith(".webp") || n.endsWith(".bmp");
+    }
+
+    static boolean isMedia(String n) {
+        n = n.toLowerCase(Locale.ENGLISH);
+        String[] ex = {".mp4", ".mkv", ".avi", ".webm", ".3gp", ".mov", ".flv", ".m4v", ".ts",
+                ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"};
+        for (String e : ex) if (n.endsWith(e)) return true;
+        return false;
+    }
+
+    private static void copyRec(File src, File dst) throws Exception {
+        if (src.isDirectory()) {
+            dst.mkdirs();
+            File[] kids = src.listFiles();
+            if (kids != null) for (File k : kids) copyRec(k, new File(dst, k.getName()));
+        } else {
+            InputStream in = new FileInputStream(src);
+            OutputStream out = new FileOutputStream(dst);
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.close();
+            in.close();
+        }
+    }
+
+    private static void deleteRec(File f) {
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids != null) for (File k : kids) deleteRec(k);
+        }
+        f.delete();
+    }
+
     private static final class FileBrowser extends LinearLayout {
         final Activity a;
         final int accent;
+        final Opener opener;
         File cwd;
         final List<File> items = new ArrayList<>();
-        final TextView path, msg;
+        final TextView path, msg, paste;
         final BaseAdapter ad;
 
-        FileBrowser(final Activity act, int accentColor) {
+        FileBrowser(final Activity act, int accentColor, Opener op) {
             super(act);
             a = act;
             accent = accentColor;
+            opener = op;
             cwd = Environment.getExternalStorageDirectory();
             setOrientation(VERTICAL);
             setBackgroundColor(0xFF14141A);
@@ -428,40 +486,36 @@ final class Tools {
             LinearLayout top = new LinearLayout(a);
             top.setOrientation(HORIZONTAL);
             top.setGravity(Gravity.CENTER_VERTICAL);
-            top.setPadding(dp(a, 8), dp(a, 6), dp(a, 8), dp(a, 6));
-            addView(top, new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 50)));
+            top.setPadding(dp(a, 8), dp(a, 6), dp(a, 8), dp(a, 2));
+            addView(top, new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 46)));
 
-            TextView up = button(a, "↑ Up", accent, 13, false);
+            TextView up = button(a, "↑ Up", accent, 12, false);
             up.setOnClickListener(new OnClickListener() {
                 public void onClick(View v) {
                     File p = cwd.getParentFile();
                     if (p != null) { cwd = p; reload(); }
                 }
             });
-            top.addView(up, new LayoutParams(dp(a, 70), dp(a, 36)));
-
-            TextView home = button(a, "Home", accent, 13, false);
-            home.setOnClickListener(new OnClickListener() {
+            top.addView(up, new LayoutParams(dp(a, 62), dp(a, 34)));
+            top.addView(small("Home", new OnClickListener() {
                 public void onClick(View v) { cwd = Environment.getExternalStorageDirectory(); reload(); }
-            });
-            LayoutParams hl = new LayoutParams(dp(a, 64), dp(a, 36));
-            hl.leftMargin = dp(a, 6);
-            top.addView(home, hl);
-
-            TextView ref = button(a, "Refresh", accent, 13, false);
-            ref.setOnClickListener(new OnClickListener() {
+            }, 58));
+            top.addView(small("Refresh", new OnClickListener() {
                 public void onClick(View v) { reload(); }
-            });
-            LayoutParams rl = new LayoutParams(dp(a, 74), dp(a, 36));
-            rl.leftMargin = dp(a, 6);
-            top.addView(ref, rl);
+            }, 66));
+            top.addView(small("+ Folder", new OnClickListener() {
+                public void onClick(View v) { newFolder(); }
+            }, 72));
+            paste = small("Paste here", new OnClickListener() {
+                public void onClick(View v) { doPaste(); }
+            }, 86);
+            top.addView(paste);
 
             path = txt(a, "", 12, 0xCCFFFFFF, false);
             path.setSingleLine(true);
             path.setEllipsize(TextUtils.TruncateAt.START);
-            LayoutParams pl = new LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            pl.leftMargin = dp(a, 10);
-            top.addView(path, pl);
+            path.setPadding(dp(a, 12), dp(a, 2), dp(a, 12), dp(a, 2));
+            addView(path);
 
             msg = txt(a, "", 13, 0xFFFFB4B4, false);
             msg.setPadding(dp(a, 14), dp(a, 6), dp(a, 14), dp(a, 6));
@@ -496,7 +550,7 @@ final class Tools {
             });
             list.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
                 public boolean onItemLongClick(AdapterView<?> p, View v, int i, long id) {
-                    confirmDelete(items.get(i));
+                    actions(items.get(i));
                     return true;
                 }
             });
@@ -504,8 +558,20 @@ final class Tools {
             reload();
         }
 
+        TextView small(String label, OnClickListener l, int w) {
+            TextView b = button(a, label, accent, 12, false);
+            b.setOnClickListener(l);
+            LayoutParams lp = new LayoutParams(dp(a, w), dp(a, 34));
+            lp.leftMargin = dp(a, 5);
+            b.setLayoutParams(lp);
+            return b;
+        }
+
+        void toast(String m) { Toast.makeText(a, m, Toast.LENGTH_SHORT).show(); }
+
         void reload() {
             path.setText(cwd.getPath());
+            paste.setVisibility(fileClip != null ? View.VISIBLE : View.GONE);
             items.clear();
             if (Build.VERSION.SDK_INT >= 23
                     && a.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
@@ -539,6 +605,7 @@ final class Tools {
         }
 
         void open(File f) {
+            if (opener != null && opener.open(f)) return;
             try {
                 try {
                     StrictMode.class.getMethod("disableDeathOnFileUriExposure").invoke(null);
@@ -556,18 +623,123 @@ final class Tools {
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 a.startActivity(i);
             } catch (Throwable t) {
-                Toast.makeText(a, "No app can open this file", Toast.LENGTH_SHORT).show();
+                toast("No app can open this file");
             }
+        }
+
+        void actions(final File f) {
+            final String[] names = {"Open", "Rename", "Copy", "Move", "Delete"};
+            new AlertDialog.Builder(a)
+                    .setTitle(f.getName())
+                    .setItems(names, new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface d, int which) {
+                            if (which == 0) {
+                                if (f.isDirectory()) { cwd = f; reload(); } else open(f);
+                            } else if (which == 1) {
+                                rename(f);
+                            } else if (which == 2 || which == 3) {
+                                fileClip = f;
+                                fileClipMove = which == 3;
+                                paste.setVisibility(View.VISIBLE);
+                                toast("Open the target folder and press \"Paste here\"");
+                            } else {
+                                confirmDelete(f);
+                            }
+                        }
+                    })
+                    .show();
+        }
+
+        void rename(final File f) {
+            final EditText et = new EditText(a);
+            et.setSingleLine(true);
+            et.setText(f.getName());
+            new AlertDialog.Builder(a)
+                    .setTitle("Rename")
+                    .setView(et)
+                    .setPositiveButton("Save", new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface d, int w) {
+                            String n = et.getText().toString().trim();
+                            if (n.length() == 0 || n.contains("/")) { toast("Invalid name"); return; }
+                            boolean ok = f.renameTo(new File(f.getParentFile(), n));
+                            toast(ok ? "Renamed" : "Could not rename");
+                            reload();
+                        }
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        }
+
+        void newFolder() {
+            final EditText et = new EditText(a);
+            et.setSingleLine(true);
+            et.setHint("Folder name");
+            new AlertDialog.Builder(a)
+                    .setTitle("New folder")
+                    .setView(et)
+                    .setPositiveButton("Create", new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface d, int w) {
+                            String n = et.getText().toString().trim();
+                            if (n.length() == 0 || n.contains("/")) { toast("Invalid name"); return; }
+                            boolean ok = new File(cwd, n).mkdirs();
+                            toast(ok ? "Folder created" : "Could not create");
+                            reload();
+                        }
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        }
+
+        void doPaste() {
+            final File src = fileClip;
+            if (src == null) return;
+            if (!src.exists()) { toast("Source file is gone"); fileClip = null; reload(); return; }
+            String name = src.getName();
+            File t = new File(cwd, name);
+            int k = 1;
+            while (t.exists()) {
+                t = new File(cwd, "copy" + (k == 1 ? "" : k) + "_" + name);
+                k++;
+            }
+            if (src.isDirectory() && t.getPath().startsWith(src.getPath() + "/")) {
+                toast("Cannot paste a folder into itself");
+                return;
+            }
+            final File dst = t;
+            final boolean move = fileClipMove;
+            toast(move ? "Moving..." : "Copying...");
+            new Thread(new Runnable() {
+                public void run() {
+                    boolean ok = true;
+                    try {
+                        if (move && src.renameTo(dst)) {
+                            // moved
+                        } else {
+                            copyRec(src, dst);
+                            if (move) deleteRec(src);
+                        }
+                    } catch (Throwable e) {
+                        ok = false;
+                    }
+                    final boolean fok = ok;
+                    a.runOnUiThread(new Runnable() {
+                        public void run() {
+                            if (move && fok) fileClip = null;
+                            toast(fok ? "Done" : "Failed");
+                            reload();
+                        }
+                    });
+                }
+            }).start();
         }
 
         void confirmDelete(final File f) {
             new AlertDialog.Builder(a)
-                    .setMessage("Delete \"" + f.getName() + "\"?")
+                    .setMessage("Delete \"" + f.getName() + "\"" + (f.isDirectory() ? " and everything inside?" : "?"))
                     .setPositiveButton("Delete", new DialogInterface.OnClickListener() {
                         public void onClick(DialogInterface d, int w) {
-                            boolean ok = f.delete();
-                            Toast.makeText(a, ok ? "Deleted" : "Could not delete (folder not empty?)",
-                                    Toast.LENGTH_SHORT).show();
+                            deleteRec(f);
+                            toast(f.exists() ? "Could not delete" : "Deleted");
                             reload();
                         }
                     })
@@ -576,8 +748,323 @@ final class Tools {
         }
     }
 
-    static View files(Activity a, int accent) {
-        return new FileBrowser(a, accent);
+    static View files(Activity a, int accent, Opener op) {
+        return new FileBrowser(a, accent, op);
+    }
+
+    // ------------------------------------------------------------ Photo viewer
+
+    static Bitmap decode(File f, int max) {
+        try {
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(f.getPath(), o);
+            int sample = 1;
+            while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= max) sample *= 2;
+            BitmapFactory.Options o2 = new BitmapFactory.Options();
+            o2.inSampleSize = sample;
+            return BitmapFactory.decodeFile(f.getPath(), o2);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    static List<File> picturesIn(File dir) {
+        List<File> out = new ArrayList<>();
+        File[] fs = dir.listFiles();
+        if (fs != null) {
+            for (File f : fs) if (f.isFile() && isImage(f.getName())) out.add(f);
+        }
+        Collections.sort(out, new java.util.Comparator<File>() {
+            public int compare(File x, File y) { return x.getName().compareToIgnoreCase(y.getName()); }
+        });
+        return out;
+    }
+
+    static View imageViewer(final Activity a, final int accent, File start) {
+        final List<File> imgs = new ArrayList<>();
+        if (start != null) {
+            imgs.addAll(picturesIn(start.getParentFile()));
+        } else {
+            File pics = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
+            imgs.addAll(picturesIn(pics));
+            imgs.addAll(picturesIn(new File(pics, "Screenshots")));
+            imgs.addAll(picturesIn(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)));
+            imgs.addAll(picturesIn(new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera")));
+        }
+        if (imgs.isEmpty()) {
+            TextView t = txt(a, "No pictures found.\nPut pictures in the Pictures folder, or open one from the Files tool.", 15, 0xCCFFFFFF, false);
+            t.setGravity(Gravity.CENTER);
+            t.setBackgroundColor(0xFF14141A);
+            return t;
+        }
+        final LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(0xFF000000);
+        final ImageView iv = new ImageView(a);
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        col.addView(iv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout bar = new LinearLayout(a);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(0xFF14141A);
+        bar.setPadding(dp(a, 8), dp(a, 6), dp(a, 8), dp(a, 6));
+        final TextView prev = button(a, "‹", accent, 20, false);
+        final TextView next = button(a, "›", accent, 20, false);
+        final TextView nameT = txt(a, "", 13, Color.WHITE, false);
+        nameT.setSingleLine(true);
+        nameT.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        nameT.setGravity(Gravity.CENTER);
+        final TextView show = button(a, "Slideshow", accent, 12, false);
+        bar.addView(prev, new LinearLayout.LayoutParams(dp(a, 46), dp(a, 36)));
+        bar.addView(nameT, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        bar.addView(next, new LinearLayout.LayoutParams(dp(a, 46), dp(a, 36)));
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(dp(a, 90), dp(a, 36));
+        sl.leftMargin = dp(a, 6);
+        bar.addView(show, sl);
+        col.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 48)));
+
+        final int[] idx = {0};
+        if (start != null) {
+            for (int i = 0; i < imgs.size(); i++) if (imgs.get(i).equals(start)) idx[0] = i;
+        }
+        final Runnable showCur = new Runnable() {
+            public void run() {
+                File f = imgs.get(idx[0]);
+                Bitmap b = decode(f, 1600);
+                if (b != null) iv.setImageBitmap(b);
+                nameT.setText((idx[0] + 1) + "/" + imgs.size() + "   " + f.getName());
+            }
+        };
+        prev.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { idx[0] = (idx[0] - 1 + imgs.size()) % imgs.size(); showCur.run(); }
+        });
+        next.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { idx[0] = (idx[0] + 1) % imgs.size(); showCur.run(); }
+        });
+        iv.setFocusable(true);
+        iv.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { idx[0] = (idx[0] + 1) % imgs.size(); showCur.run(); }
+        });
+        iv.setOnKeyListener(new View.OnKeyListener() {
+            public boolean onKey(View v, int kc, KeyEvent e) {
+                if (e.getAction() != KeyEvent.ACTION_DOWN) return false;
+                if (kc == KeyEvent.KEYCODE_DPAD_RIGHT || kc == KeyEvent.KEYCODE_PAGE_DOWN) {
+                    idx[0] = (idx[0] + 1) % imgs.size(); showCur.run(); return true;
+                }
+                if (kc == KeyEvent.KEYCODE_DPAD_LEFT || kc == KeyEvent.KEYCODE_PAGE_UP) {
+                    idx[0] = (idx[0] - 1 + imgs.size()) % imgs.size(); showCur.run(); return true;
+                }
+                return false;
+            }
+        });
+        final boolean[] playing = {false};
+        final Runnable[] loop = new Runnable[1];
+        loop[0] = new Runnable() {
+            public void run() {
+                if (!playing[0] || !col.isAttachedToWindow()) return;
+                idx[0] = (idx[0] + 1) % imgs.size();
+                showCur.run();
+                col.postDelayed(loop[0], 4000);
+            }
+        };
+        show.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                playing[0] = !playing[0];
+                show.setText(playing[0] ? "Stop" : "Slideshow");
+                if (playing[0]) col.postDelayed(loop[0], 4000);
+            }
+        });
+        col.post(showCur);
+        return col;
+    }
+
+    // ------------------------------------------------------------ Player
+
+    static View player(final Activity a, final int accent, File f) {
+        final LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(0xFF000000);
+        FrameLayout box = new FrameLayout(a);
+        final VideoView vv = new VideoView(a);
+        box.addView(vv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+        col.addView(box, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        LinearLayout bar = new LinearLayout(a);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(0xFF14141A);
+        bar.setPadding(dp(a, 8), dp(a, 6), dp(a, 8), dp(a, 6));
+        final TextView play = button(a, "Pause", accent, 12, true);
+        TextView back = button(a, "-10s", accent, 12, false);
+        TextView fwd = button(a, "+10s", accent, 12, false);
+        final TextView tm = txt(a, "0:00", 12, Color.WHITE, false);
+        final SeekBar seek = new SeekBar(a);
+        bar.addView(play, new LinearLayout.LayoutParams(dp(a, 64), dp(a, 34)));
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(dp(a, 52), dp(a, 34));
+        bl.leftMargin = dp(a, 5);
+        bar.addView(back, bl);
+        bar.addView(fwd, bl);
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        sl.leftMargin = dp(a, 8);
+        bar.addView(seek, sl);
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tl.leftMargin = dp(a, 8);
+        bar.addView(tm, tl);
+        col.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 48)));
+
+        vv.setVideoPath(f.getPath());
+        vv.setOnPreparedListener(new android.media.MediaPlayer.OnPreparedListener() {
+            public void onPrepared(android.media.MediaPlayer mp) {
+                seek.setMax(Math.max(1, vv.getDuration()));
+                vv.start();
+            }
+        });
+        vv.setOnErrorListener(new android.media.MediaPlayer.OnErrorListener() {
+            public boolean onError(android.media.MediaPlayer mp, int w, int x) {
+                Toast.makeText(a, "This file cannot be played here", Toast.LENGTH_LONG).show();
+                return true;
+            }
+        });
+        vv.setOnCompletionListener(new android.media.MediaPlayer.OnCompletionListener() {
+            public void onCompletion(android.media.MediaPlayer mp) { play.setText("Play"); }
+        });
+        View.OnClickListener toggle = new View.OnClickListener() {
+            public void onClick(View v) {
+                if (vv.isPlaying()) { vv.pause(); play.setText("Play"); }
+                else { vv.start(); play.setText("Pause"); }
+            }
+        };
+        play.setOnClickListener(toggle);
+        vv.setOnClickListener(toggle);
+        back.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { vv.seekTo(Math.max(0, vv.getCurrentPosition() - 10000)); }
+        });
+        fwd.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { vv.seekTo(Math.min(vv.getDuration(), vv.getCurrentPosition() + 10000)); }
+        });
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                if (fromUser) vv.seekTo(p);
+            }
+            public void onStartTrackingTouch(SeekBar s) {}
+            public void onStopTrackingTouch(SeekBar s) {}
+        });
+        final Runnable[] loop = new Runnable[1];
+        loop[0] = new Runnable() {
+            public void run() {
+                try {
+                    int p = vv.getCurrentPosition(), d = vv.getDuration();
+                    seek.setProgress(p);
+                    tm.setText(clock(p, false) + " / " + clock(Math.max(0, d), false));
+                } catch (Throwable t) {
+                    // ignore
+                }
+                if (col.isAttachedToWindow()) col.postDelayed(loop[0], 500);
+            }
+        };
+        col.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            public void onViewAttachedToWindow(View v) {}
+            public void onViewDetachedFromWindow(View v) {
+                try { vv.stopPlayback(); } catch (Throwable t) { /* ignore */ }
+            }
+        });
+        col.postDelayed(loop[0], 500);
+        return col;
+    }
+
+    // ------------------------------------------------------------ Speed test
+
+    private static boolean speedRunning = false;
+
+    static View speedTest(final Activity a, final int accent) {
+        final LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setBackgroundColor(0xFF14141A);
+        col.setPadding(dp(a, 20), dp(a, 24), dp(a, 20), dp(a, 20));
+        col.addView(head(a, "INTERNET SPEED (DOWNLOAD)", accent));
+        final TextView big = txt(a, "-- Mbps", 44, Color.WHITE, true);
+        col.addView(big);
+        final TextView st = txt(a, "Press Start to test", 14, 0xCCFFFFFF, false);
+        col.addView(st);
+        final LinearLayout b = bar(a, accent);
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(dp(a, 300), dp(a, 10));
+        bl.topMargin = dp(a, 14);
+        col.addView(b, bl);
+        final TextView go = button(a, "Start", accent, 16, true);
+        LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(dp(a, 160), dp(a, 46));
+        gl.topMargin = dp(a, 18);
+        col.addView(go, gl);
+        go.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (speedRunning) return;
+                speedRunning = true;
+                go.setText("Testing...");
+                st.setText("Connecting...");
+                new Thread(new Runnable() {
+                    public void run() {
+                        double mbps = 0;
+                        long ttfb = -1;
+                        boolean ok = false;
+                        try {
+                            long t0 = System.currentTimeMillis();
+                            HttpURLConnection c = (HttpURLConnection) new URL("https://speed.cloudflare.com/__down?bytes=60000000").openConnection();
+                            c.setConnectTimeout(8000);
+                            c.setReadTimeout(8000);
+                            InputStream in = c.getInputStream();
+                            ttfb = System.currentTimeMillis() - t0;
+                            byte[] buf = new byte[65536];
+                            long total = 0, start = System.currentTimeMillis(), lastUi = 0;
+                            int n;
+                            while ((n = in.read(buf)) > 0) {
+                                total += n;
+                                long now = System.currentTimeMillis();
+                                if (now - start > 9000 || !col.isAttachedToWindow()) break;
+                                if (now - lastUi > 300 && now - start > 400) {
+                                    lastUi = now;
+                                    final double m = total * 8.0 / 1e6 / ((now - start) / 1000.0);
+                                    col.post(new Runnable() {
+                                        public void run() {
+                                            big.setText(String.format(Locale.ENGLISH, "%.1f Mbps", m));
+                                            setBar(b, m / 100.0);
+                                            st.setText("Testing...");
+                                        }
+                                    });
+                                }
+                            }
+                            long el = Math.max(1, System.currentTimeMillis() - start);
+                            mbps = total * 8.0 / 1e6 / (el / 1000.0);
+                            in.close();
+                            c.disconnect();
+                            ok = total > 0;
+                        } catch (Throwable t) {
+                            ok = false;
+                        }
+                        final boolean fok = ok;
+                        final double fm = mbps;
+                        final long ft = ttfb;
+                        col.post(new Runnable() {
+                            public void run() {
+                                speedRunning = false;
+                                go.setText("Start again");
+                                if (fok) {
+                                    big.setText(String.format(Locale.ENGLISH, "%.1f Mbps", fm));
+                                    setBar(b, fm / 100.0);
+                                    st.setText("Response time: " + ft + " ms");
+                                } else {
+                                    st.setText("Test failed. Check the internet.");
+                                }
+                            }
+                        });
+                    }
+                }).start();
+            }
+        });
+        return col;
     }
 
     // -------------------------------------------------------------- Clipboard
