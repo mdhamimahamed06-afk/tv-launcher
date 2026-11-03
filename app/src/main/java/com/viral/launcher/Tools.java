@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -18,7 +20,11 @@ import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Build;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.StatFs;
 import android.os.StrictMode;
 import android.os.SystemClock;
@@ -36,6 +42,7 @@ import android.widget.BaseAdapter;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -80,6 +87,7 @@ final class Tools {
         StateListDrawable sl = new StateListDrawable();
         sl.addState(new int[]{android.R.attr.state_focused}, box(c, accent, 0xFFFFFFFF, 10, 2));
         sl.addState(new int[]{android.R.attr.state_pressed}, box(c, 0xFF8A0F18, 0xFFFFFFFF, 10, 2));
+        sl.addState(new int[]{android.R.attr.state_hovered}, box(c, strong ? accent : 0x55FFFFFF, 0xAAFFFFFF, 10, 1));
         sl.addState(new int[]{}, box(c, strong ? ((accent & 0xFFFFFF) | 0x99000000) : 0x2AFFFFFF, 0x33FFFFFF, 10, 1));
         t.setBackground(sl);
         return t;
@@ -283,7 +291,12 @@ final class Tools {
         }).start();
     }
 
-    static View monitor(final Activity a, final int accent) {
+    interface WinSource {
+        List<String> names();
+        void close(String name);
+    }
+
+    static View monitor(final Activity a, final int accent, final WinSource ws) {
         final LinearLayout col = new LinearLayout(a);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setBackgroundColor(0xFF14141A);
@@ -306,6 +319,10 @@ final class Tools {
         col.addView(netT);
         col.addView(head(a, "UPTIME", accent));
         col.addView(upT);
+        col.addView(head(a, "OPEN WINDOWS", accent));
+        final LinearLayout winBox = new LinearLayout(a);
+        winBox.setOrientation(LinearLayout.VERTICAL);
+        col.addView(winBox);
 
         final Runnable[] loop = new Runnable[1];
         final Runnable update = new Runnable() {
@@ -330,6 +347,28 @@ final class Tools {
 
                     long s = SystemClock.elapsedRealtime() / 1000;
                     upT.setText((s / 3600) + " h " + ((s / 60) % 60) + " min");
+
+                    winBox.removeAllViews();
+                    List<String> names = ws.names();
+                    if (names.isEmpty()) {
+                        winBox.addView(txt(a, "No open windows", 14, 0x99FFFFFF, false));
+                    }
+                    for (final String nm : names) {
+                        LinearLayout row = new LinearLayout(a);
+                        row.setOrientation(LinearLayout.HORIZONTAL);
+                        row.setGravity(Gravity.CENTER_VERTICAL);
+                        TextView nt = txt(a, nm, 15, Color.WHITE, false);
+                        row.addView(nt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                        TextView cb = button(a, "Close", accent, 12, false);
+                        cb.setOnClickListener(new View.OnClickListener() {
+                            public void onClick(View v) { ws.close(nm); }
+                        });
+                        row.addView(cb, new LinearLayout.LayoutParams(dp(a, 70), dp(a, 34)));
+                        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                        rl.topMargin = dp(a, 4);
+                        winBox.addView(row, rl);
+                    }
                 } catch (Throwable t) {
                     // ignore
                 }
@@ -355,7 +394,10 @@ final class Tools {
         col.addView(clean, cl);
 
         col.post(update);
-        return col;
+        ScrollView sv = new ScrollView(a);
+        sv.setBackgroundColor(0xFF14141A);
+        sv.addView(col, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return sv;
     }
 
     private static TextView head(Context c, String s, int accent) {
@@ -536,5 +578,260 @@ final class Tools {
 
     static View files(Activity a, int accent) {
         return new FileBrowser(a, accent);
+    }
+
+    // -------------------------------------------------------------- Clipboard
+
+    static final List<String> clips = new ArrayList<>();
+
+    static void addClip(String t) {
+        if (t == null) return;
+        t = t.trim();
+        if (t.length() == 0) return;
+        clips.remove(t);
+        clips.add(0, t);
+        while (clips.size() > 15) clips.remove(clips.size() - 1);
+    }
+
+    static View clipboard(final Activity a, final int accent) {
+        final LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(0xFF14141A);
+
+        LinearLayout top = new LinearLayout(a);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(a, 10), dp(a, 8), dp(a, 10), dp(a, 8));
+        TextView hint = txt(a, "Copied text appears here. Click to copy it again.", 12, 0xAAFFFFFF, false);
+        top.addView(hint, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView clear = button(a, "Clear", accent, 13, false);
+        top.addView(clear, new LinearLayout.LayoutParams(dp(a, 70), dp(a, 34)));
+        col.addView(top);
+
+        ListView list = new ListView(a);
+        list.setDivider(null);
+        list.setSelector(box(a, (accent & 0xFFFFFF) | 0x55000000, accent, 8, 2));
+        final BaseAdapter ad = new BaseAdapter() {
+            public int getCount() { return clips.size(); }
+            public Object getItem(int i) { return clips.get(i); }
+            public long getItemId(int i) { return i; }
+            public View getView(int i, View cv, ViewGroup p) {
+                TextView t = cv instanceof TextView ? (TextView) cv : new TextView(a);
+                t.setTextColor(Color.WHITE);
+                t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+                t.setMaxLines(3);
+                t.setEllipsize(TextUtils.TruncateAt.END);
+                t.setPadding(dp(a, 14), dp(a, 10), dp(a, 14), dp(a, 10));
+                t.setText(clips.get(i));
+                return t;
+            }
+        };
+        list.setAdapter(ad);
+        list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            public void onItemClick(AdapterView<?> p, View v, int i, long id) {
+                try {
+                    ClipboardManager cm = (ClipboardManager) a.getSystemService(Context.CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(ClipData.newPlainText("clip", clips.get(i)));
+                    Toast.makeText(a, "Copied", Toast.LENGTH_SHORT).show();
+                } catch (Throwable t) {
+                    // ignore
+                }
+            }
+        });
+        clear.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                clips.clear();
+                ad.notifyDataSetChanged();
+            }
+        });
+        col.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        final Runnable[] loop = new Runnable[1];
+        loop[0] = new Runnable() {
+            public void run() {
+                ad.notifyDataSetChanged();
+                if (col.isAttachedToWindow()) col.postDelayed(loop[0], 1500);
+            }
+        };
+        col.postDelayed(loop[0], 1500);
+        return col;
+    }
+
+    // ------------------------------------------------------- Timer / stopwatch
+
+    private static final Handler H = new Handler(Looper.getMainLooper());
+    private static boolean swRun = false;
+    private static long swStart = 0, swAcc = 0;
+    private static boolean cdRun = false;
+    private static long cdEnd = 0;
+    private static Context appCtx;
+    private static Ringtone ring;
+
+    private static final Runnable CD_CHECK = new Runnable() {
+        public void run() {
+            if (!cdRun) return;
+            if (System.currentTimeMillis() + 80 < cdEnd) {
+                H.postDelayed(this, 200);
+                return;
+            }
+            cdRun = false;
+            try {
+                if (appCtx != null) {
+                    Toast.makeText(appCtx, "Timer finished", Toast.LENGTH_LONG).show();
+                    ring = RingtoneManager.getRingtone(appCtx,
+                            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM));
+                    if (ring != null) {
+                        ring.play();
+                        H.postDelayed(new Runnable() {
+                            public void run() { stopRing(); }
+                        }, 15000);
+                    }
+                }
+            } catch (Throwable t) {
+                // ignore
+            }
+        }
+    };
+
+    private static void stopRing() {
+        try {
+            if (ring != null && ring.isPlaying()) ring.stop();
+        } catch (Throwable t) {
+            // ignore
+        }
+    }
+
+    private static String clock(long ms, boolean tenths) {
+        long t = Math.max(0, ms);
+        long m = t / 60000, sec = (t / 1000) % 60;
+        String r = String.format(Locale.ENGLISH, "%02d:%02d", m, sec);
+        if (tenths) r += "." + ((t / 100) % 10);
+        return r;
+    }
+
+    private static void startCountdown(Context c, long ms) {
+        appCtx = c.getApplicationContext();
+        stopRing();
+        cdEnd = System.currentTimeMillis() + ms;
+        cdRun = true;
+        H.removeCallbacks(CD_CHECK);
+        H.postDelayed(CD_CHECK, 200);
+    }
+
+    static View timer(final Activity a, final int accent) {
+        final LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(0xFF14141A);
+        col.setPadding(dp(a, 18), dp(a, 10), dp(a, 18), dp(a, 14));
+
+        col.addView(head(a, "STOPWATCH", accent));
+        final TextView swT = txt(a, "00:00.0", 36, Color.WHITE, false);
+        col.addView(swT);
+        LinearLayout r1 = new LinearLayout(a);
+        r1.setOrientation(LinearLayout.HORIZONTAL);
+        final TextView swGo = button(a, swRun ? "Stop" : "Start", accent, 15, true);
+        swGo.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (swRun) {
+                    swAcc += System.currentTimeMillis() - swStart;
+                    swRun = false;
+                    swGo.setText("Start");
+                } else {
+                    swStart = System.currentTimeMillis();
+                    swRun = true;
+                    swGo.setText("Stop");
+                }
+            }
+        });
+        LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(dp(a, 100), dp(a, 42));
+        r1.addView(swGo, b1);
+        TextView swReset = button(a, "Reset", accent, 15, false);
+        swReset.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                swRun = false;
+                swAcc = 0;
+                swGo.setText("Start");
+            }
+        });
+        LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(dp(a, 100), dp(a, 42));
+        b2.leftMargin = dp(a, 10);
+        r1.addView(swReset, b2);
+        LinearLayout.LayoutParams r1l = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        r1l.topMargin = dp(a, 8);
+        col.addView(r1, r1l);
+
+        col.addView(head(a, "COUNTDOWN TIMER", accent));
+        final TextView cdT = txt(a, "00:00", 36, Color.WHITE, false);
+        col.addView(cdT);
+        LinearLayout r2 = new LinearLayout(a);
+        r2.setOrientation(LinearLayout.HORIZONTAL);
+        final int[] presets = {1, 5, 10};
+        for (final int pm : presets) {
+            TextView pb = button(a, pm + " min", accent, 14, false);
+            pb.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) { startCountdown(a, pm * 60000L); }
+            });
+            LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(dp(a, 84), dp(a, 40));
+            pl.rightMargin = dp(a, 8);
+            r2.addView(pb, pl);
+        }
+        LinearLayout.LayoutParams r2l = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        r2l.topMargin = dp(a, 8);
+        col.addView(r2, r2l);
+
+        LinearLayout r3 = new LinearLayout(a);
+        r3.setOrientation(LinearLayout.HORIZONTAL);
+        r3.setGravity(Gravity.CENTER_VERTICAL);
+        final EditText mins = new EditText(a);
+        mins.setSingleLine(true);
+        mins.setInputType(InputType.TYPE_CLASS_NUMBER);
+        mins.setHint("minutes");
+        mins.setTextColor(Color.WHITE);
+        mins.setHintTextColor(0x88FFFFFF);
+        mins.setBackground(box(a, 0xFF26262E, 0x55FFFFFF, 10, 1));
+        mins.setPadding(dp(a, 12), 0, dp(a, 12), 0);
+        r3.addView(mins, new LinearLayout.LayoutParams(dp(a, 110), dp(a, 40)));
+        TextView go = button(a, "Start", accent, 14, true);
+        go.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                try {
+                    int m = Integer.parseInt(mins.getText().toString().trim());
+                    if (m >= 1 && m <= 600) startCountdown(a, m * 60000L);
+                } catch (Exception e) {
+                    Toast.makeText(a, "Type minutes (1-600)", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(dp(a, 80), dp(a, 40));
+        gl.leftMargin = dp(a, 8);
+        r3.addView(go, gl);
+        TextView cancel = button(a, "Cancel", accent, 14, false);
+        cancel.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                cdRun = false;
+                stopRing();
+            }
+        });
+        LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(dp(a, 80), dp(a, 40));
+        cl.leftMargin = dp(a, 8);
+        r3.addView(cancel, cl);
+        LinearLayout.LayoutParams r3l = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        r3l.topMargin = dp(a, 8);
+        col.addView(r3, r3l);
+
+        final Runnable[] loop = new Runnable[1];
+        loop[0] = new Runnable() {
+            public void run() {
+                long sw = swAcc + (swRun ? System.currentTimeMillis() - swStart : 0);
+                swT.setText(clock(sw, true));
+                cdT.setText(cdRun ? clock(cdEnd - System.currentTimeMillis(), false) : "00:00");
+                if (col.isAttachedToWindow()) col.postDelayed(loop[0], 100);
+            }
+        };
+        col.post(loop[0]);
+        return col;
     }
 }

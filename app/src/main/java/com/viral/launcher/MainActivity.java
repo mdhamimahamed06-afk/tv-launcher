@@ -1,7 +1,16 @@
 package com.viral.launcher;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.os.Environment;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
+import java.io.FileOutputStream;
 import android.content.DialogInterface;
 import android.text.Editable;
 import android.text.InputType;
@@ -108,6 +117,12 @@ public class MainActivity extends Activity {
     private final SimpleDateFormat fBig = new SimpleDateFormat("h:mm a", Locale.ENGLISH);
     private final SimpleDateFormat fTray = new SimpleDateFormat("h:mm a", Locale.ENGLISH);
     private final SimpleDateFormat fDate = new SimpleDateFormat("EEEE, d MMMM", Locale.ENGLISH);
+    private final SimpleDateFormat fHm = new SimpleDateFormat("h:mm", Locale.ENGLISH);
+    private final SimpleDateFormat fAp = new SimpleDateFormat("a", Locale.ENGLISH);
+    private final SimpleDateFormat fH = new SimpleDateFormat("h", Locale.ENGLISH);
+    private final SimpleDateFormat fMin = new SimpleDateFormat("mm", Locale.ENGLISH);
+    private final SimpleDateFormat fDay = new SimpleDateFormat("d", Locale.ENGLISH);
+    private final SimpleDateFormat fSub = new SimpleDateFormat("EEEE, MMM", Locale.ENGLISH);
     private long lastSec = -1;
 
     // volume
@@ -125,7 +140,9 @@ public class MainActivity extends Activity {
     private String wallKey = "";
     private LinearLayout wallPanel;
     private QrView qrView;
-    private TextView wallUrl, wallStatus, wallClose;
+    private TextView wallUrl, wallStatus, wallClose, wallHead, wallNext;
+    private boolean profileMode = false;
+    private File profileFile;
 
     // web windows (YouTube, Google, ... inside draggable windows on the desktop)
     private static final String SITE_URL = "https://viralquality.blogspot.com";
@@ -173,7 +190,9 @@ public class MainActivity extends Activity {
             long sec = d.getTime() / 1000;
             if (sec != lastSec) {
                 lastSec = sec;
-                bigTime.setText(fBig.format(d));
+                setBigTime(d);
+                updateGreeting(d);
+                updateWidgets(sec);
                 bigDate.setText(fDate.format(d));
                 trayClock.setText(fTray.format(d));
                 if (locked) lockTime.setText(fBig.format(d) + "\n" + fDate.format(d));
@@ -230,6 +249,7 @@ public class MainActivity extends Activity {
         StateListDrawable sl = new StateListDrawable();
         sl.addState(new int[]{android.R.attr.state_focused}, glass(RED, 0xFFFFFFFF, 10, 2));
         sl.addState(new int[]{android.R.attr.state_pressed}, glass(0xFFB5121F, 0xFFFFFFFF, 10, 2));
+        sl.addState(new int[]{android.R.attr.state_hovered}, accent ? glass(RED, 0xAAFFFFFF, 10, 1) : glass(0x55FFFFFF, 0xAAFFFFFF, 10, 1));
         sl.addState(new int[]{}, accent ? glass(RED, 0x55FFFFFF, 10, 1) : glass(0x22FFFFFF, 0x33FFFFFF, 10, 1));
         return sl;
     }
@@ -421,6 +441,7 @@ public class MainActivity extends Activity {
         WebWindow.RED = RED;
         slideOn = prefs.getBoolean("slide", false);
         customFile = new File(getFilesDir(), "custom_wall.jpg");
+        profileFile = new File(getFilesDir(), "profile.jpg");
         wallIdx = prefs.getInt("wall", 0);
         applyTz(prefs.getString("tz", ""));
 
@@ -447,6 +468,7 @@ public class MainActivity extends Activity {
         col.addView(desk, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         buildDeskIcons(dm);
+        buildWidgets(dm);
         clockBlock = buildClockBlock(dm);
         desk.addView(clockBlock, clockLp());
         clockBlock.setVisibility(prefs.getBoolean("clockoff", false) ? View.GONE : View.VISIBLE);
@@ -490,6 +512,22 @@ public class MainActivity extends Activity {
 
         buildPanels(root);
 
+        clipMgr = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        clipL = new ClipboardManager.OnPrimaryClipChangedListener() {
+            public void onPrimaryClipChanged() {
+                try {
+                    ClipData cd = clipMgr.getPrimaryClip();
+                    if (cd != null && cd.getItemCount() > 0) {
+                        CharSequence t = cd.getItemAt(0).coerceToText(MainActivity.this);
+                        if (t != null) Tools.addClip(t.toString());
+                    }
+                } catch (Throwable x) {
+                    // ignore
+                }
+            }
+        };
+        clipMgr.addPrimaryClipChangedListener(clipL);
+
         setContentView(root);
         if (!booted) {
             booted = true;
@@ -515,35 +553,239 @@ public class MainActivity extends Activity {
     private FrameLayout.LayoutParams clockLp() {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.END | Gravity.TOP);
-        lp.rightMargin = dp(28);
-        lp.topMargin = dp(20);
+                Gravity.CENTER_HORIZONTAL | Gravity.TOP);
+        lp.topMargin = dp(24);
         return lp;
     }
+
+    private int clockStyle = 0;
+    private TextView greetView;
 
     private LinearLayout buildClockBlock(android.util.DisplayMetrics dm) {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setGravity(Gravity.CENTER_HORIZONTAL);
 
-        int sz = Math.min(dp(130), (int) (dm.heightPixels * 0.22f));
+        greetView = label("", 22, 0xFFFFFFFF, false);
+        greetView.setShadowLayer(dp(5), 0, dp(1), 0xAA000000);
+        greetView.setGravity(Gravity.CENTER);
+        c.addView(greetView);
+
+        int sz = Math.min(dp(200), (int) (dm.heightPixels * 0.34f));
         clockView = new ClockView(this);
-        c.addView(clockView, new LinearLayout.LayoutParams(sz, sz));
+        LinearLayout.LayoutParams cvl = new LinearLayout.LayoutParams(sz, sz);
+        cvl.topMargin = dp(8);
+        c.addView(clockView, cvl);
 
-        bigTime = label("", 26, Color.WHITE, false);
-        bigTime.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
-        bigTime.setShadowLayer(dp(4), 0, dp(1), 0xAA000000);
+        bigTime = label("", 112, Color.WHITE, false);
+        bigTime.setTypeface(Typeface.create("sans-serif-thin", Typeface.NORMAL));
+        bigTime.setIncludeFontPadding(false);
+        bigTime.setShadowLayer(dp(6), 0, dp(2), 0xAA000000);
         bigTime.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        tp.topMargin = dp(10);
-        c.addView(bigTime, tp);
+        c.addView(bigTime);
 
-        bigDate = label("", 13, 0xFFFFFFFF, false);
-        bigDate.setShadowLayer(dp(4), 0, dp(1), 0xAA000000);
+        bigDate = label("", 18, 0xFFFFFFFF, false);
+        bigDate.setShadowLayer(dp(5), 0, dp(1), 0xAA000000);
         bigDate.setGravity(Gravity.CENTER);
-        c.addView(bigDate);
+        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dl.topMargin = dp(4);
+        c.addView(bigDate, dl);
+
+        c.setClickable(true);
+        c.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { cycleClock(); }
+        });
+        clockStyle = Math.abs(prefs.getInt("cstyle", 0)) % 3;
+        applyClockStyle();
         return c;
+    }
+
+    private void applyClockStyle() {
+        clockView.setVisibility(clockStyle == 1 ? View.VISIBLE : View.GONE);
+        bigTime.setVisibility(clockStyle == 1 ? View.GONE : View.VISIBLE);
+        bigTime.setTextSize(TypedValue.COMPLEX_UNIT_SP, clockStyle == 2 ? 90 : 112);
+        bigTime.setLineSpacing(0, clockStyle == 2 ? 0.82f : 1f);
+        lastSec = -1;
+    }
+
+    private void cycleClock() {
+        clockStyle = (clockStyle + 1) % 3;
+        prefs.edit().putInt("cstyle", clockStyle).apply();
+        applyClockStyle();
+    }
+
+    private void setBigTime(Date d) {
+        if (clockStyle == 1) return;
+        if (clockStyle == 0) {
+            String hm = fHm.format(d), ap = fAp.format(d);
+            SpannableString sp = new SpannableString(hm + " " + ap);
+            sp.setSpan(new RelativeSizeSpan(0.3f), hm.length(), sp.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            bigTime.setText(sp);
+        } else {
+            String hh = fH.format(d), mm = fMin.format(d);
+            SpannableString sp = new SpannableString(hh + "\n" + mm);
+            sp.setSpan(new ForegroundColorSpan(RED), hh.length() + 1, sp.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            bigTime.setText(sp);
+        }
+    }
+
+    private void updateGreeting(Date d) {
+        Calendar c = Calendar.getInstance(tz);
+        c.setTime(d);
+        int hr = c.get(Calendar.HOUR_OF_DAY);
+        String g;
+        int col;
+        if (hr < 5) { g = "Good night"; col = 0xFF9DB7FF; }
+        else if (hr < 12) { g = "Good morning"; col = 0xFFFFD27A; }
+        else if (hr < 17) { g = "Good afternoon"; col = 0xFFFFFFFF; }
+        else if (hr < 21) { g = "Good evening"; col = 0xFFFFA45C; }
+        else { g = "Good night"; col = 0xFF9DB7FF; }
+        greetView.setText(g + ", " + userName());
+        greetView.setTextColor(col);
+    }
+
+    // ----- home widgets (draggable cards)
+
+    private final List<View> widgetViews = new ArrayList<>();
+    private TextView wxCard, dayNum, daySub, noteV, ramV;
+    private long lastWidgetSec = -100;
+
+    private LinearLayout cardBase(String title) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(14), dp(10), dp(14), dp(8));
+        c.setBackground(glass(0x88101015, 0x55FFFFFF, 16, 1));
+        c.setFocusable(true);
+        c.setClickable(true);
+        TextView t = label(title, 10, RED, true);
+        t.setLetterSpacing(0.2f);
+        c.addView(t);
+        return c;
+    }
+
+    private void addCard(int idx, View card, int x, int y) {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(180), dp(96));
+        lp.leftMargin = prefs.getInt("w" + idx + "x", x);
+        lp.topMargin = prefs.getInt("w" + idx + "y", y);
+        desk.addView(card, lp);
+        makeDraggable(card, "w" + idx, null);
+        card.setVisibility(prefs.getBoolean("widgetsoff", false) ? View.GONE : View.VISIBLE);
+        widgetViews.add(card);
+    }
+
+    private void buildWidgets(android.util.DisplayMetrics dm) {
+        int total = dp(180) * 4 + dp(14) * 3;
+        int x0 = Math.max(dp(10), (dm.widthPixels - total) / 2);
+        int y = dm.heightPixels - dp(63) - dp(96) - dp(24);
+
+        LinearLayout w0 = cardBase("WEATHER");
+        wxCard = label("--", 20, Color.WHITE, true);
+        wxCard.setMaxLines(2);
+        w0.addView(wxCard);
+        addCard(0, w0, x0, y);
+
+        LinearLayout w1 = cardBase("TODAY");
+        dayNum = label("", 32, Color.WHITE, true);
+        w1.addView(dayNum);
+        daySub = label("", 13, 0xCCFFFFFF, false);
+        w1.addView(daySub);
+        w1.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { toggleCal(); }
+        });
+        addCard(1, w1, x0 + dp(194), y);
+
+        LinearLayout w2 = cardBase("NOTE");
+        noteV = label("", 13, Color.WHITE, false);
+        noteV.setMaxLines(3);
+        noteV.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        w2.addView(noteV);
+        w2.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { openTool("Notepad"); }
+        });
+        addCard(2, w2, x0 + dp(388), y);
+
+        LinearLayout w3 = cardBase("SYSTEM");
+        ramV = label("RAM --", 20, Color.WHITE, true);
+        w3.addView(ramV);
+        w3.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { openTool("System"); }
+        });
+        addCard(3, w3, x0 + dp(582), y);
+    }
+
+    private void updateWidgets(long sec) {
+        if (wxCard == null || sec - lastWidgetSec < 5) return;
+        lastWidgetSec = sec;
+        Date d = new Date();
+        CharSequence w = trayWx.getText();
+        wxCard.setText(w.length() > 0 ? w : "Waiting for weather...");
+        dayNum.setText(fDay.format(d));
+        daySub.setText(fSub.format(d));
+        String n = prefs.getString("note", "").trim();
+        noteV.setText(n.length() == 0 ? "Click to write a note" : n);
+        try {
+            ActivityManager am2 = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+            ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+            am2.getMemoryInfo(mi);
+            int pct = (int) (100L * (mi.totalMem - mi.availMem) / Math.max(1L, mi.totalMem));
+            ramV.setText("RAM " + pct + "%");
+        } catch (Throwable t) {
+            // ignore
+        }
+    }
+
+    private void makeDraggable(final View v, final String key, final String ctxName) {
+        final float[] st = new float[4];
+        final boolean[] f = new boolean[2];
+        v.setOnTouchListener(new View.OnTouchListener() {
+            public boolean onTouch(View view, MotionEvent e) {
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
+                switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        f[0] = false;
+                        f[1] = (e.getButtonState() & MotionEvent.BUTTON_SECONDARY) != 0;
+                        if (f[1]) {
+                            showCtx(e.getRawX(), e.getRawY(), ctxName);
+                            return true;
+                        }
+                        st[0] = e.getRawX();
+                        st[1] = e.getRawY();
+                        st[2] = lp.leftMargin;
+                        st[3] = lp.topMargin;
+                        v.setPressed(true);
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        if (f[1]) return true;
+                        float dx = e.getRawX() - st[0], dy = e.getRawY() - st[1];
+                        if (!f[0] && (Math.abs(dx) > dp(8) || Math.abs(dy) > dp(8))) f[0] = true;
+                        if (f[0]) {
+                            lp.leftMargin = (int) Math.max(0, Math.min(desk.getWidth() - v.getWidth(), st[2] + dx));
+                            lp.topMargin = (int) Math.max(0, Math.min(desk.getHeight() - v.getHeight(), st[3] + dy));
+                            v.setLayoutParams(lp);
+                        }
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        v.setPressed(false);
+                        if (f[1]) return true;
+                        if (f[0]) {
+                            prefs.edit().putInt(key + "x", lp.leftMargin).putInt(key + "y", lp.topMargin).apply();
+                        } else {
+                            v.performClick();
+                        }
+                        return true;
+                    case MotionEvent.ACTION_CANCEL:
+                        v.setPressed(false);
+                        return true;
+                    default:
+                        return true;
+                }
+            }
+        });
+    }
+
+    private void tip(View v, String text) {
+        if (Build.VERSION.SDK_INT >= 26) v.setTooltipText(text);
     }
 
     private LinearLayout buildTaskbar() {
@@ -558,6 +800,7 @@ public class MainActivity extends Activity {
         t.addView(tbLead, new LinearLayout.LayoutParams(0, 1, prefs.getBoolean("tbleft", false) ? 0f : 1f));
 
         startBtn = btn("■  START", true);
+        tip(startBtn, "START (Win key)");
         startBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { toggleStart(); }
         });
@@ -600,6 +843,7 @@ public class MainActivity extends Activity {
         trayClock.setPadding(dp(10), 0, dp(10), 0);
         trayClock.setGravity(Gravity.CENTER_VERTICAL);
         trayClock.setBackground(stateBg(false));
+        tip(trayClock, "Calendar");
         trayClock.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { toggleCal(); }
         });
@@ -667,19 +911,23 @@ public class MainActivity extends Activity {
 
     private void openWeb(String name, String url) {
         hideStart();
+        closeAllPanels();
         if (showExisting(name)) return;
         openWin(name, url, null, false);
     }
 
     private void openTool(String name) {
         hideStart();
+        closeAllPanels();
         if (showExisting(name)) return;
         View v;
         if (name.equals("Files")) v = Tools.files(this, RED);
         else if (name.equals("Notepad")) v = Tools.notepad(this, prefs);
         else if (name.equals("Calculator")) v = Tools.calculator(this, RED);
-        else v = Tools.monitor(this, RED);
-        openWin(name, null, v, name.equals("Calculator"));
+        else if (name.equals("Clipboard")) v = Tools.clipboard(this, RED);
+        else if (name.equals("Timer")) v = Tools.timer(this, RED);
+        else v = Tools.monitor(this, RED, winSrc);
+        openWin(name, null, v, name.equals("Calculator") || name.equals("Timer"));
     }
 
     private void openWin(String name, String url, View content, boolean small) {
@@ -716,6 +964,118 @@ public class MainActivity extends Activity {
             toast("Could not open window");
         }
         refreshTabs();
+    }
+
+    private final Tools.WinSource winSrc = new Tools.WinSource() {
+        public List<String> names() {
+            List<String> l = new ArrayList<>();
+            for (WebWindow w : wins) l.add(w.name);
+            return l;
+        }
+
+        public void close(String name) {
+            for (WebWindow w : new ArrayList<>(wins)) {
+                if (w.name.equals(name)) {
+                    w.close();
+                    return;
+                }
+            }
+        }
+    };
+
+    private void newBrowser() {
+        String n = "Browser";
+        for (int i = 2; i <= 3; i++) {
+            boolean used = false;
+            for (WebWindow w : wins) if (w.name.equals(n)) used = true;
+            if (!used) break;
+            n = "Browser " + i;
+        }
+        openWeb(n, "https://www.google.com");
+    }
+
+    private void closeTop() {
+        WebWindow w = topWindow();
+        if (w != null) w.close();
+    }
+
+    private void cycleWindows() {
+        if (wins.isEmpty()) return;
+        WebWindow top = topWindow();
+        WebWindow next = null;
+        for (WebWindow w : wins) {
+            if (w != top) {
+                next = w;
+                break;
+            }
+        }
+        if (next == null) next = wins.get(0);
+        next.show();
+        refreshTabs();
+    }
+
+    private void showDesktop() {
+        boolean anyVisible = false;
+        for (WebWindow w : wins) if (!w.minimized) anyVisible = true;
+        for (WebWindow w : new ArrayList<>(wins)) {
+            if (anyVisible) w.minimize(); else w.show();
+        }
+    }
+
+    private void screenshot() {
+        try {
+            View root = getWindow().getDecorView();
+            Bitmap b = Bitmap.createBitmap(root.getWidth(), root.getHeight(), Bitmap.Config.ARGB_8888);
+            root.draw(new Canvas(b));
+            String name = "VQ_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ENGLISH).format(new Date()) + ".png";
+            File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Screenshots");
+            if (!(dir.exists() || dir.mkdirs()) || !dir.canWrite()) dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            File out = new File(dir, name);
+            FileOutputStream fo = new FileOutputStream(out);
+            b.compress(Bitmap.CompressFormat.PNG, 100, fo);
+            fo.close();
+            toast("Screenshot saved: " + out.getPath());
+        } catch (Throwable t) {
+            toast("Screenshot failed");
+        }
+    }
+
+    private boolean handleShortcut(int kc) {
+        switch (kc) {
+            case KeyEvent.KEYCODE_Y: openWeb("YouTube", "https://m.youtube.com"); return true;
+            case KeyEvent.KEYCODE_G: openWeb("Google", "https://www.google.com"); return true;
+            case KeyEvent.KEYCODE_F: openWeb("Facebook", "https://m.facebook.com"); return true;
+            case KeyEvent.KEYCODE_B: newBrowser(); return true;
+            case KeyEvent.KEYCODE_E: openTool("Files"); return true;
+            case KeyEvent.KEYCODE_N: openTool("Notepad"); return true;
+            case KeyEvent.KEYCODE_C: openTool("Calculator"); return true;
+            case KeyEvent.KEYCODE_M: openTool("System"); return true;
+            case KeyEvent.KEYCODE_V: openTool("Clipboard"); return true;
+            case KeyEvent.KEYCODE_T: openTool("Timer"); return true;
+            case KeyEvent.KEYCODE_S: openSearch(); return true;
+            case KeyEvent.KEYCODE_L: lockFromMenu(); return true;
+            case KeyEvent.KEYCODE_D: showDesktop(); return true;
+            case KeyEvent.KEYCODE_W: closeTop(); return true;
+            case KeyEvent.KEYCODE_TAB: cycleWindows(); return true;
+            default: return false;
+        }
+    }
+
+    private void shortcutsDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Keyboard shortcuts")
+                .setMessage("Alt (or Win) +\n"
+                        + "Y YouTube    G Google    F Facebook    B New browser\n"
+                        + "E Files    N Notepad    C Calculator    M Task manager\n"
+                        + "V Clipboard    T Timer    S Search    L Lock\n"
+                        + "D Show desktop    W Close window    Tab Switch window\n\n"
+                        + "Ctrl+T new browser, Ctrl+W close, Ctrl+Tab switch\n"
+                        + "Ctrl+Shift+Esc Task manager\n"
+                        + "Win key alone = START    Esc = close menus\n"
+                        + "PrtSc = Screenshot\n"
+                        + "Just start typing on the home screen to search.")
+                .setPositiveButton("OK", null)
+                .show();
     }
 
     private void searchWeb(String q) {
@@ -788,29 +1148,26 @@ public class MainActivity extends Activity {
         return glass(0xF2101015, 0x44FFFFFF, 16, 1);
     }
 
+    private final List<View> iconViews = new ArrayList<>();
+
     private void buildDeskIcons(android.util.DisplayMetrics dm) {
-        iconsBox = new LinearLayout(this);
-        iconsBox.setOrientation(LinearLayout.HORIZONTAL);
-        final String[] names = {"YouTube", "Google", "Facebook", "Viral Quality", "Browser", "Files", "Notepad", "Calculator", "System"};
-        final String[] marks = {"Y", "G", "f", "VQ", "B", "F", "N", "=", "S"};
-        final int[] cols = {0xFFE11D2E, 0xFF2F7BFF, 0xFF1877F2, 0xFFB5121F, 0xFF4B5262, 0xFFF59E0B, 0xFF19B36B, 0xFF8B5CF6, 0xFF0EA5A5};
-        int rows = Math.max(3, (int) ((dm.heightPixels / dm.density - 62 - 40) / 94));
-        LinearLayout colBox = null;
+        final String[] names = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer"};
+        final String[] marks = {"Y", "G", "f", "B", "F", "N", "=", "S", "C", "T"};
+        final int[] cols = {0xFFE11D2E, 0xFF2F7BFF, 0xFF1877F2, 0xFF4B5262, 0xFFF59E0B, 0xFF19B36B, 0xFF8B5CF6, 0xFF0EA5A5, 0xFFEC4899, 0xFF6366F1};
+        int rows = Math.max(3, (int) ((dm.heightPixels / dm.density - 62 - 40) / 98));
+        boolean off = prefs.getBoolean("iconsoff", true);
         for (int i = 0; i < names.length; i++) {
-            if (i % rows == 0) {
-                colBox = new LinearLayout(this);
-                colBox.setOrientation(LinearLayout.VERTICAL);
-                iconsBox.addView(colBox, new LinearLayout.LayoutParams(dp(92), ViewGroup.LayoutParams.WRAP_CONTENT));
-            }
-            colBox.addView(deskIcon(names[i], marks[i], cols[i]), new LinearLayout.LayoutParams(dp(88), dp(92)));
+            View v = deskIcon(names[i], marks[i], cols[i]);
+            int defX = dp(14) + (i / rows) * dp(92);
+            int defY = dp(14) + (i % rows) * dp(98);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(88), dp(92));
+            lp.leftMargin = prefs.getInt("i" + i + "x", defX);
+            lp.topMargin = prefs.getInt("i" + i + "y", defY);
+            desk.addView(v, lp);
+            makeDraggable(v, "i" + i, names[i]);
+            v.setVisibility(off ? View.GONE : View.VISIBLE);
+            iconViews.add(v);
         }
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP | Gravity.START);
-        lp.leftMargin = dp(14);
-        lp.topMargin = dp(14);
-        desk.addView(iconsBox, lp);
-        iconsBox.setVisibility(prefs.getBoolean("iconsoff", false) ? View.GONE : View.VISIBLE);
 
         desk.setLongClickable(true);
         desk.setOnTouchListener(new View.OnTouchListener() {
@@ -818,7 +1175,7 @@ public class MainActivity extends Activity {
                 lastX = e.getRawX();
                 lastY = e.getRawY();
                 if ((e.getButtonState() & MotionEvent.BUTTON_SECONDARY) != 0) {
-                    if (e.getActionMasked() == MotionEvent.ACTION_DOWN) showCtx(lastX, lastY);
+                    if (e.getActionMasked() == MotionEvent.ACTION_DOWN) showCtx(lastX, lastY, null);
                     return true;
                 }
                 return false;
@@ -826,7 +1183,7 @@ public class MainActivity extends Activity {
         });
         desk.setOnLongClickListener(new View.OnLongClickListener() {
             public boolean onLongClick(View v) {
-                showCtx(lastX, lastY);
+                showCtx(lastX, lastY, null);
                 return true;
             }
         });
@@ -842,13 +1199,14 @@ public class MainActivity extends Activity {
         StateListDrawable sl = new StateListDrawable();
         sl.addState(new int[]{android.R.attr.state_focused}, glass(0x44FFFFFF, 0xFFFFFFFF, 12, 2));
         sl.addState(new int[]{android.R.attr.state_pressed}, glass(0x55FFFFFF, 0xFFFFFFFF, 12, 2));
+        sl.addState(new int[]{android.R.attr.state_hovered}, glass(0x33FFFFFF, 0x88FFFFFF, 12, 1));
         sl.addState(new int[]{}, glass(0x00000000, 0, 12, 0));
         t.setBackground(sl);
         TextView badge = label(mark, 20, Color.WHITE, true);
         badge.setGravity(Gravity.CENTER);
         badge.setBackground(glass(color, 0x66FFFFFF, 14, 1));
         t.addView(badge, new LinearLayout.LayoutParams(dp(52), dp(52)));
-        TextView l = label(name, 11, Color.WHITE, false);
+        TextView l = label(name.equals("System") ? "Task manager" : name, 11, Color.WHITE, false);
         l.setSingleLine(true);
         l.setGravity(Gravity.CENTER);
         l.setShadowLayer(dp(3), 0, dp(1), 0xCC000000);
@@ -859,6 +1217,7 @@ public class MainActivity extends Activity {
         t.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { openBuiltin(name); }
         });
+        tip(t, name);
         return t;
     }
 
@@ -875,7 +1234,8 @@ public class MainActivity extends Activity {
     }
 
     private void openBuiltin(String name) {
-        if (name.equals("Files") || name.equals("Notepad") || name.equals("Calculator") || name.equals("System")) {
+        if (name.equals("Files") || name.equals("Notepad") || name.equals("Calculator") || name.equals("System")
+                || name.equals("Clipboard") || name.equals("Timer")) {
             openTool(name);
             return;
         }
@@ -884,9 +1244,25 @@ public class MainActivity extends Activity {
     }
 
     private void toggleIcons() {
-        boolean off = iconsBox.getVisibility() == View.VISIBLE;
-        iconsBox.setVisibility(off ? View.GONE : View.VISIBLE);
+        boolean off = !iconViews.isEmpty() && iconViews.get(0).getVisibility() == View.VISIBLE;
+        for (View v : iconViews) v.setVisibility(off ? View.GONE : View.VISIBLE);
         prefs.edit().putBoolean("iconsoff", off).apply();
+    }
+
+    private void toggleWidgets() {
+        boolean off = !widgetViews.isEmpty() && widgetViews.get(0).getVisibility() == View.VISIBLE;
+        for (View v : widgetViews) v.setVisibility(off ? View.GONE : View.VISIBLE);
+        prefs.edit().putBoolean("widgetsoff", off).apply();
+    }
+
+    private void resetLayout() {
+        SharedPreferences.Editor ed = prefs.edit();
+        for (String k : new ArrayList<>(prefs.getAll().keySet())) {
+            if (k.matches("^[iw]\\d+[xy]$")) ed.remove(k);
+        }
+        ed.apply();
+        toast("Layout reset (windows will close)");
+        recreate();
     }
 
     private void toggleClock() {
@@ -1114,31 +1490,40 @@ public class MainActivity extends Activity {
             }
         });
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
-        p.setMargins(0, 0, 0, dp(5));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
+        p.setMargins(0, 0, 0, dp(4));
         ctxMenu.addView(t, p);
     }
 
-    private void showCtx(float x, float y) {
+    private void showCtx(float x, float y, String extra) {
         if (locked) return;
         hideStart();
         ctxMenu.removeAllViews();
+        if (extra != null) {
+            final String ex = extra;
+            addCtx("Open " + ex, () -> openBuiltin(ex));
+        }
         addCtx("Search", () -> openSearch());
-        addCtx("Calendar", () -> toggleCal());
         addCtx("Next wallpaper", () -> nextWall());
         addCtx("Custom wallpaper (QR)", () -> openWallPanel());
         addCtx("Desktop icons show / hide", () -> toggleIcons());
-        addCtx("Clock show / hide", () -> toggleClock());
-        addCtx("Refresh apps", () -> { loadApps(); toast("Apps refreshed"); });
+        addCtx("Widgets show / hide", () -> toggleWidgets());
+        addCtx("Clock style (next)", () -> cycleClock());
+        addCtx("Screenshot", () -> screenshot());
+        addCtx("Reset layout", () -> resetLayout());
         addCtx("Lock screen", () -> lockFromMenu());
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-        int est = dp(16) + 8 * dp(47);
+        int est = dp(16) + ctxMenu.getChildCount() * dp(42);
         FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) ctxMenu.getLayoutParams();
         p.leftMargin = (int) Math.max(0, Math.min(x, dm.widthPixels - dp(250)));
         p.topMargin = (int) Math.max(0, Math.min(y, dm.heightPixels - est - dp(70)));
         ctxMenu.setLayoutParams(p);
         ctxLayer.setVisibility(View.VISIBLE);
         if (ctxMenu.getChildCount() > 0) ctxMenu.getChildAt(0).requestFocus();
+    }
+
+    private void showCtx(float x, float y) {
+        showCtx(x, y, null);
     }
 
     private void hideCtx() {
@@ -1190,6 +1575,27 @@ public class MainActivity extends Activity {
                     public void onClick(View v) {
                         hideSearch();
                         launch(a);
+                    }
+                });
+                LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+                p.setMargins(0, 0, 0, dp(5));
+                searchResults.addView(t, p);
+            }
+        }
+        final String[][] bi = {{"YouTube", "YouTube"}, {"Google", "Google"}, {"Facebook", "Facebook"}, {"Browser", "Browser"},
+                {"Files", "Files"}, {"Notepad", "Notepad"}, {"Calculator", "Calculator"}, {"System", "Task manager"},
+                {"Clipboard", "Clipboard"}, {"Timer", "Timer / Stopwatch"}};
+        for (final String[] b : bi) {
+            if (n >= 9) break;
+            if (b[1].toLowerCase(Locale.ENGLISH).contains(ql) || b[0].toLowerCase(Locale.ENGLISH).contains(ql)) {
+                n++;
+                TextView t = btn(b[1], false);
+                t.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+                t.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        hideSearch();
+                        openBuiltin(b[0]);
                     }
                 });
                 LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
@@ -1261,8 +1667,8 @@ public class MainActivity extends Activity {
     // ----- lock screen, PIN, startup site
 
     private String userName() {
-        String n = prefs.getString("uname", "Viral Quality");
-        return n.length() == 0 ? "Viral Quality" : n;
+        String n = prefs.getString("uname", "User");
+        return n.length() == 0 ? "User" : n;
     }
 
     private void lockFromMenu() {
@@ -1273,11 +1679,40 @@ public class MainActivity extends Activity {
         lockNow();
     }
 
-    private void lockNow() {
-        locked = true;
+    private void applyAvatar() {
         String n = userName();
         lockName.setText(n);
-        lockAvatar.setText(n.substring(0, 1).toUpperCase(Locale.ENGLISH));
+        Bitmap src = null;
+        if (profileFile.exists()) {
+            try {
+                src = BitmapFactory.decodeFile(profileFile.getPath());
+            } catch (Throwable t) {
+                src = null;
+            }
+        }
+        if (src == null) {
+            lockAvatar.setBackground(glass(RED, 0x88FFFFFF, 48, 2));
+            lockAvatar.setText(n.substring(0, 1).toUpperCase(Locale.ENGLISH));
+            return;
+        }
+        int sz = dp(96);
+        Bitmap out = Bitmap.createBitmap(sz, sz, Bitmap.Config.ARGB_8888);
+        Canvas cv = new Canvas(out);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        cv.drawCircle(sz / 2f, sz / 2f, sz / 2f - dp(1), p);
+        p.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN));
+        int side = Math.min(src.getWidth(), src.getHeight());
+        android.graphics.Rect from = new android.graphics.Rect(
+                (src.getWidth() - side) / 2, (src.getHeight() - side) / 2,
+                (src.getWidth() + side) / 2, (src.getHeight() + side) / 2);
+        cv.drawBitmap(src, from, new android.graphics.Rect(0, 0, sz, sz), p);
+        lockAvatar.setText("");
+        lockAvatar.setBackground(new android.graphics.drawable.BitmapDrawable(getResources(), out));
+    }
+
+    private void lockNow() {
+        locked = true;
+        applyAvatar();
         lockMsg.setText(" ");
         lockEt.setText("");
         Date d = new Date();
@@ -1490,13 +1925,20 @@ public class MainActivity extends Activity {
         addMenu(left, "Files", () -> openTool("Files"));
         addMenu(left, "Notepad", () -> openTool("Notepad"));
         addMenu(left, "Calculator", () -> openTool("Calculator"));
-        addMenu(left, "System monitor", () -> openTool("System"));
+        addMenu(left, "Task manager / System", () -> openTool("System"));
+        addMenu(left, "Clipboard history", () -> openTool("Clipboard"));
+        addMenu(left, "Timer / Stopwatch", () -> openTool("Timer"));
         addMenu(left, "Clean RAM", () -> cleanRam());
         section(left, "DESKTOP");
         addMenu(left, "Search", () -> openSearch());
         addMenu(left, "Calendar", () -> toggleCal());
         addMenu(left, "Desktop icons show / hide", () -> toggleIcons());
         addMenu(left, "Clock show / hide", () -> toggleClock());
+        addMenu(left, "Clock style (next)", () -> cycleClock());
+        addMenu(left, "Widgets show / hide", () -> toggleWidgets());
+        addMenu(left, "Screenshot (PrtSc)", () -> screenshot());
+        addMenu(left, "Reset icon / widget layout", () -> resetLayout());
+        addMenu(left, "Keyboard shortcuts", () -> shortcutsDialog());
         addMenu(left, "Wallpaper slideshow on / off", () -> toggleSlide());
         addMenu(left, "Accent color (next)", () -> nextAccent());
         addMenu(left, "Taskbar glass / solid", () -> toggleGlass());
@@ -1504,6 +1946,7 @@ public class MainActivity extends Activity {
         addMenu(left, "Startup site...", () -> startupDialog());
         addMenu(left, "Lock screen now", () -> lockFromMenu());
         addMenu(left, "Account & password", () -> pinDialog());
+        addMenu(left, "Profile picture (QR)", () -> openWallPanel(true));
         section(left, "SYSTEM");
         addMenu(left, "Settings", new Runnable() { public void run() { openSettings(Settings.ACTION_SETTINGS); } });
         addMenu(left, "Wi-Fi / Network", new Runnable() { public void run() { openSettings(Settings.ACTION_WIFI_SETTINGS); } });
@@ -1673,6 +2116,7 @@ public class MainActivity extends Activity {
         m.setBackground(glass(0xF2101015, 0x66FFFFFF, 20, 1));
 
         TextView head = label("CUSTOM WALLPAPER", 13, RED, true);
+        wallHead = head;
         head.setLetterSpacing(0.25f);
         head.setPadding(0, 0, 0, dp(12));
         m.addView(head);
@@ -1714,11 +2158,18 @@ public class MainActivity extends Activity {
         next.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) { nextWall(); }
         });
+        wallNext = next;
         btns.addView(next, tbLp());
 
         TextView rm = btn("Remove custom", false);
         rm.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
+                if (profileMode) {
+                    profileFile.delete();
+                    applyAvatar();
+                    wallStatus.setText("Profile picture removed");
+                    return;
+                }
                 customFile.delete();
                 wallIdx = 0;
                 applyWall();
@@ -1756,16 +2207,33 @@ public class MainActivity extends Activity {
     }
 
     private void openWallPanel() {
+        openWallPanel(false);
+    }
+
+    private void openWallPanel(boolean profile) {
         hideStart();
         hideVol();
+        if (server != null) {
+            server.stop();
+            server = null;
+        }
+        profileMode = profile;
+        wallHead.setText(profile ? "PROFILE PICTURE" : "CUSTOM WALLPAPER");
+        wallNext.setVisibility(profile ? View.GONE : View.VISIBLE);
         if (server == null) {
             wallKey = String.valueOf(1000 + new Random().nextInt(9000));
             android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            server = new WallServer(customFile, wallKey, dm.widthPixels, dm.heightPixels,
+            server = new WallServer(profile ? profileFile : customFile, wallKey,
+                    profile ? 512 : dm.widthPixels, profile ? 512 : dm.heightPixels,
                     new WallServer.Listener() {
                         public void onUploaded() {
                             runOnUiThread(new Runnable() {
                                 public void run() {
+                                    if (profileMode) {
+                                        applyAvatar();
+                                        wallStatus.setText("Profile picture updated!");
+                                        return;
+                                    }
                                     wallIdx = 0;
                                     prefs.edit().putInt("wall", 0).apply();
                                     applyWall();
@@ -2137,6 +2605,12 @@ public class MainActivity extends Activity {
         fBig.setTimeZone(tz);
         fTray.setTimeZone(tz);
         fDate.setTimeZone(tz);
+        fHm.setTimeZone(tz);
+        fAp.setTimeZone(tz);
+        fH.setTimeZone(tz);
+        fMin.setTimeZone(tz);
+        fDay.setTimeZone(tz);
+        fSub.setTimeZone(tz);
         lastSec = -1;
     }
 
@@ -2256,6 +2730,63 @@ public class MainActivity extends Activity {
         if (startBtn != null) startBtn.requestFocus();
     }
 
+    private boolean metaCombo = false;
+    private ClipboardManager clipMgr;
+    private ClipboardManager.OnPrimaryClipChangedListener clipL;
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        int kc = e.getKeyCode();
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        if (kc == KeyEvent.KEYCODE_META_LEFT || kc == KeyEvent.KEYCODE_META_RIGHT) {
+            if (down) metaCombo = false;
+            else if (!metaCombo && !locked) toggleStart();
+            return true;
+        }
+        if (locked) return super.dispatchKeyEvent(e);
+        if (down && e.getRepeatCount() == 0) {
+            boolean ctrl = e.isCtrlPressed();
+            if (kc == KeyEvent.KEYCODE_SYSRQ) {
+                screenshot();
+                return true;
+            }
+            if (kc == KeyEvent.KEYCODE_ESCAPE) {
+                if (ctrl && e.isShiftPressed()) {
+                    openTool("System");
+                    return true;
+                }
+                if (fsView != null) {
+                    if (fsCb != null) fsCb.onCustomViewHidden();
+                    winHost.onFullscreenVideoEnd();
+                }
+                closeAllPanels();
+                hideStart();
+                hideVol();
+                return true;
+            }
+            if (e.isMetaPressed()) metaCombo = true;
+            if ((e.isAltPressed() || e.isMetaPressed()) && handleShortcut(kc)) return true;
+            if (ctrl) {
+                if (kc == KeyEvent.KEYCODE_T) { newBrowser(); return true; }
+                if (kc == KeyEvent.KEYCODE_W) { closeTop(); return true; }
+                if (kc == KeyEvent.KEYCODE_TAB) { cycleWindows(); return true; }
+            }
+        }
+        // typing anywhere on the home screen opens search
+        if (down && !e.isCtrlPressed() && !e.isAltPressed() && !e.isMetaPressed()) {
+            int u = e.getUnicodeChar();
+            boolean busy = wallPanel.getVisibility() == View.VISIBLE || fsView != null || topWindow() != null
+                    || ctxLayer.getVisibility() == View.VISIBLE || calPanel.getVisibility() == View.VISIBLE;
+            if (u > 32 && u != 127 && !busy && !(getCurrentFocus() instanceof EditText)) {
+                openSearch();
+                searchEt.setText(String.valueOf((char) u));
+                searchEt.setSelection(searchEt.getText().length());
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(e);
+    }
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent e) {
         if (locked) {
@@ -2308,6 +2839,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        try {
+            clipMgr.removePrimaryClipChangedListener(clipL);
+        } catch (Throwable x) {
+            // ignore
+        }
         h.removeCallbacksAndMessages(null);
         if (server != null) server.stop();
         try {

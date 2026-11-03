@@ -326,6 +326,7 @@ final class WebWindow extends FrameLayout {
         StateListDrawable sl = new StateListDrawable();
         sl.addState(new int[]{android.R.attr.state_focused}, box(RED, 0xFFFFFFFF, 8, 2));
         sl.addState(new int[]{android.R.attr.state_pressed}, box(0xFFB5121F, 0xFFFFFFFF, 8, 2));
+        sl.addState(new int[]{android.R.attr.state_hovered}, box(0x44FFFFFF, 0x88FFFFFF, 8, 1));
         sl.addState(new int[]{}, box(0x00000000, 0x00000000, 8, 0));
         t.setBackground(sl);
         return t;
