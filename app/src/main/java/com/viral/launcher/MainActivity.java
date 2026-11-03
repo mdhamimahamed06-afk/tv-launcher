@@ -531,6 +531,9 @@ public class MainActivity extends Activity {
             }
         };
         clipMgr.addPrimaryClipChangedListener(clipL);
+        h.postDelayed(new Runnable() {
+            public void run() { checkLatest(); }
+        }, 4000);
         registerReceiver(dlReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
 
         setContentView(root);
@@ -816,6 +819,19 @@ public class MainActivity extends Activity {
             public void onClick(View v) { openSearch(); }
         });
         t.addView(searchBtn, tbLp());
+
+        updBadge = btn("UPDATE", true);
+        updBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        updBadge.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { updateLauncher(); }
+        });
+        updBadge.setVisibility(View.GONE);
+        t.addView(updBadge, tbLp());
+        badgeAnim = android.animation.ObjectAnimator.ofFloat(updBadge, "alpha", 1f, 0.35f);
+        badgeAnim.setDuration(700);
+        badgeAnim.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+        badgeAnim.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+        badgeAnim.start();
 
         for (int i = 0; i < 3; i++) {
             slots[i] = makeSlot(i);
@@ -1422,6 +1438,8 @@ public class MainActivity extends Activity {
         root.addView(calPanel, cpl);
         calPanel.setVisibility(View.GONE);
 
+        buildUpdPanel(root);
+
         // lock screen (always on top): profile + password, like Windows
         lockView = new FrameLayout(this);
         lockView.setBackgroundColor(0xE6000000);
@@ -1922,6 +1940,8 @@ public class MainActivity extends Activity {
         head.setLetterSpacing(0.25f);
         head.setPadding(dp(8), dp(2), 0, dp(10));
         left.addView(head);
+        updItem = addMenu(left, "Update launcher", () -> updateLauncher());
+        refreshUpdateText();
         section(left, "WEB WINDOWS");
         addMenu(left, "YouTube", new Runnable() { public void run() { openWeb("YouTube", "https://m.youtube.com"); } });
         addMenu(left, "Google", new Runnable() { public void run() { openWeb("Google", "https://www.google.com"); } });
@@ -1959,7 +1979,6 @@ public class MainActivity extends Activity {
         addMenu(left, "Account & password", () -> pinDialog());
         addMenu(left, "Profile picture (QR)", () -> openWallPanel(true));
         section(left, "SYSTEM");
-        addMenu(left, "Update launcher (latest)", () -> updateLauncher());
         addMenu(left, "Settings", new Runnable() { public void run() { openSettings(Settings.ACTION_SETTINGS); } });
         addMenu(left, "Wi-Fi / Network", new Runnable() { public void run() { openSettings(Settings.ACTION_WIFI_SETTINGS); } });
         addMenu(left, "Display", new Runnable() { public void run() { openSettings(Settings.ACTION_DISPLAY_SETTINGS); } });
@@ -1968,7 +1987,13 @@ public class MainActivity extends Activity {
         addMenu(left, "Next wallpaper", new Runnable() { public void run() { nextWall(); } });
         addMenu(left, "Floating volume button", new Runnable() { public void run() { ensureOverlay(true); } });
         addMenu(left, "Refresh apps", new Runnable() { public void run() { loadApps(); toast("Apps refreshed"); } });
-        p.addView(sv, new LinearLayout.LayoutParams(dp(230), ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout leftWrap = new LinearLayout(this);
+        leftWrap.setOrientation(LinearLayout.VERTICAL);
+        leftWrap.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        verText = label("VQ Launcher  \u2022  Build " + curBuild(), 12, 0xCCFFFFFF, true);
+        verText.setPadding(dp(8), dp(8), 0, dp(2));
+        leftWrap.addView(verText);
+        p.addView(leftWrap, new LinearLayout.LayoutParams(dp(230), ViewGroup.LayoutParams.MATCH_PARENT));
 
         View div = new View(this);
         div.setBackgroundColor(0x33FFFFFF);
@@ -2083,6 +2108,7 @@ public class MainActivity extends Activity {
     }
 
     private void openStart(int slot) {
+        checkLatest();
         closeWallPanel();
         hideVol();
         pinSlot = slot;
@@ -2747,6 +2773,56 @@ public class MainActivity extends Activity {
 
     private boolean metaCombo = false;
 
+    // ----- version info
+
+    private TextView updItem, verText;
+    private int latestBuild = -1;
+    private long lastCheck = 0;
+
+    private int curBuild() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    private void refreshUpdateText() {
+        if (updItem == null) return;
+        int cur = curBuild();
+        if (updBadge != null) updBadge.setVisibility(latestBuild > cur ? View.VISIBLE : View.GONE);
+        if (latestBuild < 0) {
+            updItem.setText("Update launcher  (build " + cur + ")");
+        } else if (latestBuild > cur) {
+            updItem.setText("NEW: update to build " + latestBuild + "  (now " + cur + ")");
+        } else {
+            updItem.setText("Up to date: build " + cur);
+        }
+    }
+
+    private void checkLatest() {
+        long now = System.currentTimeMillis();
+        if (now - lastCheck < 60000) return;
+        lastCheck = now;
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    String j = http("https://api.github.com/repos/mdhamimahamed06-afk/tv-launcher/releases/latest");
+                    String tag = new JSONObject(j).optString("tag_name", "");
+                    final int n = Integer.parseInt(tag.replaceAll("[^0-9]", ""));
+                    runOnUiThread(new Runnable() {
+                        public void run() {
+                            latestBuild = n;
+                            refreshUpdateText();
+                        }
+                    });
+                } catch (Throwable t) {
+                    // offline or rate limited: keep the old text
+                }
+            }
+        }).start();
+    }
+
     // ----- downloads and one-click launcher update
 
     private static final String UPDATE_URL =
@@ -2779,7 +2855,7 @@ public class MainActivity extends Activity {
         }
     };
 
-    private void startDownload(String url, String ua, String name, String mime, boolean priv) {
+    private long startDownload(String url, String ua, String name, String mime, boolean priv) {
         try {
             if (dlm == null) dlm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
             DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
@@ -2800,15 +2876,167 @@ public class MainActivity extends Activity {
             long id = dlm.enqueue(r);
             dlNames.put(id, name);
             toast("Downloading " + name + " ...");
+            return id;
         } catch (Throwable t) {
             toast("Download failed");
+            return -1;
         }
     }
 
     private void updateLauncher() {
-        toast("Downloading the latest launcher (about 1 minute)...");
-        startDownload(UPDATE_URL, null, "VQLauncher.apk", "application/vnd.android.package-archive", true);
+        long id = startDownload(UPDATE_URL, null, "VQLauncher.apk", "application/vnd.android.package-archive", true);
+        if (id >= 0) showUpdPanel(id);
     }
+
+    // ----- animated update panel
+
+    private LinearLayout updPanel;
+    private SpinnerView updSpin;
+    private TextView updTitle, updStatus, updBadge;
+    private View updFill, updRest;
+    private long updDlId = -1;
+    private android.animation.ObjectAnimator badgeAnim;
+
+    private class SpinnerView extends View {
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF r = new RectF();
+        boolean spinning = true;
+
+        SpinnerView(Context c) {
+            super(c);
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeCap(Paint.Cap.ROUND);
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            float w = getWidth(), hh = getHeight();
+            float sw = dp(5);
+            p.setStrokeWidth(sw);
+            r.set(sw, sw, w - sw, hh - sw);
+            p.setColor(0x33FFFFFF);
+            c.drawArc(r, 0, 360, false, p);
+            if (spinning) {
+                p.setColor(RED);
+                float a = (System.currentTimeMillis() % 1000) / 1000f * 360f;
+                c.drawArc(r, a, 100, false, p);
+                if (isShown()) postInvalidateOnAnimation();
+            }
+        }
+    }
+
+    private void buildUpdPanel(FrameLayout root) {
+        updPanel = new LinearLayout(this);
+        updPanel.setOrientation(LinearLayout.VERTICAL);
+        updPanel.setGravity(Gravity.CENTER_HORIZONTAL);
+        updPanel.setPadding(dp(28), dp(22), dp(28), dp(20));
+        updPanel.setBackground(panelBg());
+        updSpin = new SpinnerView(this);
+        updPanel.addView(updSpin, new LinearLayout.LayoutParams(dp(64), dp(64)));
+        updTitle = label("Updating VQ Launcher", 20, Color.WHITE, true);
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tl.topMargin = dp(14);
+        updPanel.addView(updTitle, tl);
+        updStatus = label("", 14, 0xCCFFFFFF, false);
+        updStatus.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sl.topMargin = dp(6);
+        updPanel.addView(updStatus, sl);
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setBackground(glass(0x33FFFFFF, 0, 6, 0));
+        updFill = new View(this);
+        updFill.setBackground(glass(RED, 0, 6, 0));
+        bar.addView(updFill, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.02f));
+        updRest = new View(this);
+        bar.addView(updRest, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.98f));
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(dp(360), dp(10));
+        bl.topMargin = dp(16);
+        updPanel.addView(bar, bl);
+        TextView hide = btn("Hide", false);
+        hide.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { hideUpd(); }
+        });
+        LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(dp(100), dp(40));
+        hl.topMargin = dp(16);
+        updPanel.addView(hide, hl);
+        root.addView(updPanel, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        updPanel.setVisibility(View.GONE);
+    }
+
+    private void setUpdBar(float f) {
+        f = Math.max(0.02f, Math.min(1f, f));
+        updFill.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, f));
+        updRest.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - f));
+    }
+
+    private void showUpdPanel(long id) {
+        updDlId = id;
+        updTitle.setText(latestBuild > curBuild() ? "Updating to build " + latestBuild : "Updating VQ Launcher");
+        updStatus.setText("Starting download...");
+        updSpin.spinning = true;
+        setUpdBar(0.02f);
+        updPanel.setAlpha(0f);
+        updPanel.setScaleX(0.92f);
+        updPanel.setScaleY(0.92f);
+        updPanel.setVisibility(View.VISIBLE);
+        updPanel.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(250).start();
+        updSpin.invalidate();
+        h.removeCallbacks(updPoll);
+        h.post(updPoll);
+    }
+
+    private void hideUpd() {
+        h.removeCallbacks(updPoll);
+        if (updPanel != null && updPanel.getVisibility() == View.VISIBLE) {
+            updPanel.animate().alpha(0f).scaleX(0.92f).scaleY(0.92f).setDuration(200)
+                    .withEndAction(new Runnable() {
+                        public void run() { updPanel.setVisibility(View.GONE); }
+                    }).start();
+        }
+    }
+
+    private final Runnable updPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (dlm == null || updDlId < 0) return;
+            android.database.Cursor cu = dlm.query(new DownloadManager.Query().setFilterById(updDlId));
+            if (cu == null || !cu.moveToFirst()) {
+                if (cu != null) cu.close();
+                hideUpd();
+                return;
+            }
+            int st = cu.getInt(cu.getColumnIndex(DownloadManager.COLUMN_STATUS));
+            long got = cu.getLong(cu.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+            long tot = cu.getLong(cu.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+            cu.close();
+            if (st == DownloadManager.STATUS_SUCCESSFUL) {
+                updSpin.spinning = false;
+                setUpdBar(1f);
+                updStatus.setText("Download complete. Opening the installer...");
+                h.postDelayed(new Runnable() {
+                    public void run() { hideUpd(); }
+                }, 4000);
+                return;
+            }
+            if (st == DownloadManager.STATUS_FAILED) {
+                updSpin.spinning = false;
+                updStatus.setText("Download failed. Check the internet and try again.");
+                return;
+            }
+            if (tot > 0) {
+                int pct = (int) (100L * got / tot);
+                updStatus.setText("Downloading...  " + pct + "%");
+                setUpdBar(got / (float) tot);
+            } else {
+                updStatus.setText("Downloading...");
+            }
+            h.postDelayed(this, 400);
+        }
+    };
 
     private void installApk(Uri u) {
         if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
@@ -2908,6 +3136,7 @@ public class MainActivity extends Activity {
         if (ctxLayer.getVisibility() == View.VISIBLE) { hideCtx(); return; }
         if (searchPanel.getVisibility() == View.VISIBLE) { hideSearch(); return; }
         if (calPanel.getVisibility() == View.VISIBLE) { calPanel.setVisibility(View.GONE); return; }
+        if (updPanel.getVisibility() == View.VISIBLE) { hideUpd(); return; }
         if (fsView != null) {
             if (fsCb != null) fsCb.onCustomViewHidden();
             winHost.onFullscreenVideoEnd();
@@ -2941,6 +3170,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        if (badgeAnim != null) badgeAnim.cancel();
         try {
             unregisterReceiver(dlReceiver);
         } catch (Throwable x) {
