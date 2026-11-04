@@ -1462,6 +1462,10 @@ public class MainActivity extends Activity {
     }
 
     private void openBuiltin(String name) {
+        if ((name.equals("WhatsApp") || name.equals("Telegram") || name.equals("TikTok")) && webViewOld()) {
+            openExternal(siteUrl(name));
+            return;
+        }
         if (name.equals("Files") || name.equals("Notepad") || name.equals("Calculator") || name.equals("System")
                 || name.equals("Clipboard") || name.equals("Timer") || name.equals("Gallery")) {
             openTool(name);
@@ -2988,19 +2992,57 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private int majorOf(String ver) {
+        try {
+            return Integer.parseInt(ver.split("\\.")[0]);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    private boolean webViewOld() {
+        String ua = android.webkit.WebSettings.getDefaultUserAgent(this);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("Chrome/([0-9.]+)").matcher(ua);
+        return m.find() && majorOf(m.group(1)) < 100;
+    }
+
+    // a browser app with its own modern engine: Firefox, or a Chrome new enough
+    private String modernBrowserPkg() {
+        String[] ff = {"org.mozilla.firefox", "org.mozilla.firefox_beta", "org.mozilla.fenix"};
+        for (String p : ff) {
+            try {
+                getPackageManager().getPackageInfo(p, 0);
+                return p;
+            } catch (Throwable t) {
+                // not installed
+            }
+        }
+        try {
+            String v = getPackageManager().getPackageInfo("com.android.chrome", 0).versionName;
+            if (v != null && majorOf(v) >= 100) return "com.android.chrome";
+        } catch (Throwable t) {
+            // not installed
+        }
+        return null;
+    }
+
     private void openExternal(String url) {
         hideStart();
+        String pkg = modernBrowserPkg();
+        if (pkg == null) {
+            new AlertDialog.Builder(this).setTitle("Needs a modern browser")
+                    .setMessage("This site does not work with the old browser engine of this box.\n\n"
+                            + "Install Firefox (or update Chrome), then try again. It will open here automatically.")
+                    .setPositiveButton("OK", null).show();
+            return;
+        }
         Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-        i.setPackage("com.android.chrome");
+        i.setPackage(pkg);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(i);
         } catch (Throwable t) {
-            try {
-                i.setPackage(null);
-                startActivity(i);
-            } catch (Throwable t2) {
-                toast("No browser app found");
-            }
+            toast("Could not open the browser");
         }
     }
 
@@ -3675,9 +3717,9 @@ public class MainActivity extends Activity {
         addMenu(left, "TikTok", () -> openBuiltin("TikTok"));
         addMenu(left, "WhatsApp (Alt+A)", () -> openBuiltin("WhatsApp"));
         addMenu(left, "Telegram (Alt+H)", () -> openBuiltin("Telegram"));
-        addMenu(left, "WhatsApp in Chrome app", () -> openExternal("https://web.whatsapp.com"));
-        addMenu(left, "Telegram in Chrome app", () -> openExternal("https://web.telegram.org/k/"));
-        addMenu(left, "TikTok in Chrome app", () -> openExternal("https://www.tiktok.com"));
+        addMenu(left, "WhatsApp (modern browser)", () -> openExternal("https://web.whatsapp.com"));
+        addMenu(left, "Telegram (modern browser)", () -> openExternal("https://web.telegram.org/k/"));
+        addMenu(left, "TikTok (modern browser)", () -> openExternal("https://www.tiktok.com"));
         addMenu(left, "Viral Quality", new Runnable() { public void run() { openWeb("Viral Quality", SITE_URL); } });
         addMenu(left, "+ New browser window", new Runnable() { public void run() { openWeb("Browser", "https://www.google.com"); } });
         webBox = new LinearLayout(this);
