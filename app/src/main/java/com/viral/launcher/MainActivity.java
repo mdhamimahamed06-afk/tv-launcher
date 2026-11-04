@@ -3010,6 +3010,9 @@ public class MainActivity extends Activity {
         String ver = m.find() ? m.group(1) : "unknown";
         new AlertDialog.Builder(this).setTitle("Browser engine")
                 .setMessage("WebView (Chrome engine): " + ver + "\nAndroid: " + Build.VERSION.RELEASE
+                        + "  (API " + Build.VERSION.SDK_INT + ")"
+                        + "\nCPU: " + android.text.TextUtils.join(", ", Build.SUPPORTED_ABIS)
+                        + "\nModel: " + Build.MODEL
                         + "\n\nWhatsApp Web / Telegram Web need a recent engine (about Chrome 100+).")
                 .setPositiveButton("OK", null).show();
     }
