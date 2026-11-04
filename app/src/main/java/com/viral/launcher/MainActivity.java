@@ -663,6 +663,38 @@ public class MainActivity extends Activity {
     // ----- home widgets (draggable cards)
 
     private final List<View> widgetViews = new ArrayList<>();
+    private final List<Integer> widgetIds = new ArrayList<>();
+    private final String[] WIDGET_NAMES = {"Weather", "Today (date)", "Note", "System (RAM)", "World clock",
+            "YouTube search", "To-do list", "Music", "Prayer time", "News & cricket"};
+
+    private boolean widgetWanted(int idx) {
+        return !prefs.getBoolean("widgetsoff", false) && !prefs.getBoolean("wh" + idx, false);
+    }
+
+    private void chooseWidgetsDialog() {
+        if (prefs.getBoolean("widgetsoff", false)) {
+            prefs.edit().putBoolean("widgetsoff", false).apply();
+            for (int i = 0; i < widgetViews.size(); i++) {
+                widgetViews.get(i).setVisibility(widgetWanted(widgetIds.get(i)) ? View.VISIBLE : View.GONE);
+            }
+        }
+        final boolean[] on = new boolean[WIDGET_NAMES.length];
+        for (int i = 0; i < on.length; i++) on[i] = !prefs.getBoolean("wh" + i, false);
+        new AlertDialog.Builder(this)
+                .setTitle("Choose widgets (tick = show)")
+                .setMultiChoiceItems(WIDGET_NAMES, on, new DialogInterface.OnMultiChoiceClickListener() {
+                    public void onClick(DialogInterface d, int which, boolean checked) {
+                        prefs.edit().putBoolean("wh" + which, !checked).apply();
+                        for (int i = 0; i < widgetViews.size(); i++) {
+                            if (widgetIds.get(i) == which) {
+                                widgetViews.get(i).setVisibility(checked ? View.VISIBLE : View.GONE);
+                            }
+                        }
+                    }
+                })
+                .setPositiveButton("Done", null)
+                .show();
+    }
     private TextView wxCard, dayNum, daySub, noteV, ramV;
     private long lastWidgetSec = -100;
 
@@ -685,8 +717,9 @@ public class MainActivity extends Activity {
         lp.topMargin = prefs.getInt("w" + idx + "y", y);
         desk.addView(card, lp);
         makeDraggable(card, "w" + idx, null);
-        card.setVisibility(prefs.getBoolean("widgetsoff", false) ? View.GONE : View.VISIBLE);
+        card.setVisibility(widgetWanted(idx) ? View.VISIBLE : View.GONE);
         widgetViews.add(card);
+        widgetIds.add(idx);
     }
 
     private void buildWidgets(android.util.DisplayMetrics dm) {
@@ -997,6 +1030,7 @@ public class MainActivity extends Activity {
         try {
             WebWindow win = new WebWindow(this, name, url, content, winHost, slot);
             win.small = small;
+            if (url != null && (name.equals("WhatsApp") || name.equals("Telegram") || name.equals("TikTok"))) win.setDesktop(true);
             desk.addView(win, lp);
             wins.add(win);
             if (!small) retile();
@@ -1220,6 +1254,9 @@ public class MainActivity extends Activity {
             case KeyEvent.KEYCODE_P: openPhotos(null); return true;
             case KeyEvent.KEYCODE_X: openTool("Speed"); return true;
             case KeyEvent.KEYCODE_O: openTool("Downloads"); return true;
+            case KeyEvent.KEYCODE_Z: openBuiltin("TikTok"); return true;
+            case KeyEvent.KEYCODE_A: openBuiltin("WhatsApp"); return true;
+            case KeyEvent.KEYCODE_H: openBuiltin("Telegram"); return true;
             case KeyEvent.KEYCODE_J: openTool("Convert"); return true;
             case KeyEvent.KEYCODE_K: toggleKb(); return true;
             case KeyEvent.KEYCODE_R: cycleSplit(); return true;
@@ -1252,6 +1289,7 @@ public class MainActivity extends Activity {
                         + "U Update launcher    Q Quick settings\n"
                         + "P Photos    X Speed test    O Downloads\n"
                         + "J Converter    R Split size 50/70/30\n"
+                        + "Z TikTok    A WhatsApp    H Telegram\n"
                         + "K Keyboard-mouse mode (arrows, Enter = click)\n\n"
                         + "Ctrl+T new browser, Ctrl+W close, Ctrl+Tab switch\n"
                         + "Ctrl+Shift+Esc Task manager\n"
@@ -1336,9 +1374,9 @@ public class MainActivity extends Activity {
     private final List<View> iconViews = new ArrayList<>();
 
     private void buildDeskIcons(android.util.DisplayMetrics dm) {
-        final String[] names = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer"};
-        final String[] marks = {"Y", "G", "f", "B", "F", "N", "=", "S", "C", "T"};
-        final int[] cols = {0xFFE11D2E, 0xFF2F7BFF, 0xFF1877F2, 0xFF4B5262, 0xFFF59E0B, 0xFF19B36B, 0xFF8B5CF6, 0xFF0EA5A5, 0xFFEC4899, 0xFF6366F1};
+        final String[] names = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer", "TikTok", "WhatsApp", "Telegram"};
+        final String[] marks = {"Y", "G", "f", "B", "F", "N", "=", "S", "C", "T", "Tk", "Wa", "Tg"};
+        final int[] cols = {0xFFE11D2E, 0xFF2F7BFF, 0xFF1877F2, 0xFF4B5262, 0xFFF59E0B, 0xFF19B36B, 0xFF8B5CF6, 0xFF0EA5A5, 0xFFEC4899, 0xFF6366F1, 0xFF111111, 0xFF25D366, 0xFF229ED9};
         int rows = Math.max(3, (int) ((dm.heightPixels / dm.density - 62 - 40) / 98));
         boolean off = prefs.getBoolean("iconsoff", true);
         for (int i = 0; i < names.length; i++) {
@@ -1410,6 +1448,9 @@ public class MainActivity extends Activity {
         if (name.equals("YouTube")) return "https://m.youtube.com";
         if (name.equals("Google") || name.equals("Browser")) return "https://www.google.com";
         if (name.equals("Facebook")) return "https://m.facebook.com";
+        if (name.equals("TikTok")) return "https://www.tiktok.com";
+        if (name.equals("WhatsApp")) return "https://web.whatsapp.com";
+        if (name.equals("Telegram")) return "https://web.telegram.org/a/";
         if (name.equals("Viral Quality")) return SITE_URL;
         for (String line : prefs.getString("sites", "").split("\n")) {
             int i = line.indexOf('\t');
@@ -1435,9 +1476,11 @@ public class MainActivity extends Activity {
     }
 
     private void toggleWidgets() {
-        boolean off = !widgetViews.isEmpty() && widgetViews.get(0).getVisibility() == View.VISIBLE;
-        for (View v : widgetViews) v.setVisibility(off ? View.GONE : View.VISIBLE);
+        boolean off = !prefs.getBoolean("widgetsoff", false);
         prefs.edit().putBoolean("widgetsoff", off).apply();
+        for (int i = 0; i < widgetViews.size(); i++) {
+            widgetViews.get(i).setVisibility(widgetWanted(widgetIds.get(i)) ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void resetLayout() {
@@ -1900,8 +1943,9 @@ public class MainActivity extends Activity {
         lp.topMargin = prefs.getInt("w" + idx + "y", y);
         desk.addView(card, lp);
         makeDraggable(card, "w" + idx, null);
-        card.setVisibility(prefs.getBoolean("widgetsoff", false) ? View.GONE : View.VISIBLE);
+        card.setVisibility(widgetWanted(idx) ? View.VISIBLE : View.GONE);
         widgetViews.add(card);
+        widgetIds.add(idx);
     }
 
     private void buildExtraWidgets(android.util.DisplayMetrics dm) {
@@ -2135,7 +2179,7 @@ public class MainActivity extends Activity {
         final String[] f = fs.get(fi);
         final List<String> ids = new ArrayList<>();
         final List<String> names = new ArrayList<>();
-        String[] builtin = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer"};
+        String[] builtin = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer", "TikTok", "WhatsApp", "Telegram"};
         for (String b : builtin) { ids.add(b); names.add(b); }
         for (AppItem a : apps) {
             if (a.label == null) continue;
@@ -3169,6 +3213,7 @@ public class MainActivity extends Activity {
         addCtx("Next wallpaper", () -> nextWall());
         addCtx("Custom wallpaper (QR)", () -> openWallPanel());
         addCtx("Desktop icons show / hide", () -> toggleIcons());
+        addCtx("Choose widgets", () -> chooseWidgetsDialog());
         addCtx("Widgets show / hide", () -> toggleWidgets());
         addCtx("Clock style (next)", () -> cycleClock());
         addCtx("Quick settings", () -> toggleQuick());
@@ -3252,7 +3297,8 @@ public class MainActivity extends Activity {
         }
         final String[][] bi = {{"YouTube", "YouTube"}, {"Google", "Google"}, {"Facebook", "Facebook"}, {"Browser", "Browser"},
                 {"Files", "Files"}, {"Notepad", "Notepad"}, {"Calculator", "Calculator"}, {"System", "Task manager"},
-                {"Clipboard", "Clipboard"}, {"Timer", "Timer / Stopwatch"}};
+                {"Clipboard", "Clipboard"}, {"Timer", "Timer / Stopwatch"},
+                {"TikTok", "TikTok"}, {"WhatsApp", "WhatsApp"}, {"Telegram", "Telegram"}};
         for (final String[] b : bi) {
             if (n >= 9) break;
             if (b[1].toLowerCase(Locale.ENGLISH).contains(ql) || b[0].toLowerCase(Locale.ENGLISH).contains(ql)) {
@@ -3595,6 +3641,9 @@ public class MainActivity extends Activity {
         addMenu(left, "YouTube", new Runnable() { public void run() { openWeb("YouTube", "https://m.youtube.com"); } });
         addMenu(left, "Google", new Runnable() { public void run() { openWeb("Google", "https://www.google.com"); } });
         addMenu(left, "Facebook", new Runnable() { public void run() { openWeb("Facebook", "https://m.facebook.com"); } });
+        addMenu(left, "TikTok", () -> openBuiltin("TikTok"));
+        addMenu(left, "WhatsApp (Alt+A)", () -> openBuiltin("WhatsApp"));
+        addMenu(left, "Telegram (Alt+H)", () -> openBuiltin("Telegram"));
         addMenu(left, "Viral Quality", new Runnable() { public void run() { openWeb("Viral Quality", SITE_URL); } });
         addMenu(left, "+ New browser window", new Runnable() { public void run() { openWeb("Browser", "https://www.google.com"); } });
         webBox = new LinearLayout(this);
@@ -3620,6 +3669,7 @@ public class MainActivity extends Activity {
         addMenu(left, "Desktop icons show / hide", () -> toggleIcons());
         addMenu(left, "Clock show / hide", () -> toggleClock());
         addMenu(left, "Clock style (next)", () -> cycleClock());
+        addMenu(left, "Choose widgets (pick each one)", () -> chooseWidgetsDialog());
         addMenu(left, "Widgets show / hide", () -> toggleWidgets());
         addMenu(left, "Screenshot (PrtSc)", () -> screenshot());
         addMenu(left, "Reset icon / widget layout", () -> resetLayout());
