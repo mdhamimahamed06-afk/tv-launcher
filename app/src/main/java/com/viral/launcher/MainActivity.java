@@ -31,6 +31,7 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.os.SystemClock;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -211,6 +212,7 @@ public class MainActivity extends Activity {
             boolean smooth = clockStyle == 1 && clockBlock.getVisibility() == View.VISIBLE && topWindow() == null;
             if (smooth) clockView.invalidate();
             extrasTick();
+            extras2Tick();
             h.postDelayed(this, smooth ? 40 : 250);
         }
     };
@@ -475,6 +477,7 @@ public class MainActivity extends Activity {
         buildDeskIcons(dm);
         buildWidgets(dm);
         buildExtraWidgets(dm);
+        buildExtraWidgets2(dm);
         clockBlock = buildClockBlock(dm);
         desk.addView(clockBlock, clockLp());
         clockBlock.setVisibility(prefs.getBoolean("clockoff", false) ? View.GONE : View.VISIBLE);
@@ -518,6 +521,7 @@ public class MainActivity extends Activity {
 
         buildPanels(root);
         buildExtras(root, dm);
+        buildExtras2(root);
 
         clipMgr = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         clipL = new ClipboardManager.OnPrimaryClipChangedListener() {
@@ -952,25 +956,32 @@ public class MainActivity extends Activity {
         View v;
         if (name.equals("Files")) v = Tools.files(this, RED, fileOpener);
         else if (name.equals("Speed")) v = Tools.speedTest(this, RED);
+        else if (name.equals("Downloads")) v = Tools.downloads(this, RED, fileOpener);
+        else if (name.equals("Convert")) v = Tools.converter(this, RED);
         else if (name.equals("Photos")) v = Tools.imageViewer(this, RED, null);
         else if (name.equals("Notepad")) v = Tools.notepad(this, prefs);
         else if (name.equals("Calculator")) v = Tools.calculator(this, RED);
         else if (name.equals("Clipboard")) v = Tools.clipboard(this, RED);
         else if (name.equals("Timer")) v = Tools.timer(this, RED);
         else v = Tools.monitor(this, RED, winSrc);
-        openWin(name, null, v, name.equals("Calculator") || name.equals("Timer"));
+        openWin(name, null, v, name.equals("Calculator") || name.equals("Timer") || name.equals("Convert"));
     }
 
     private void openWin(String name, String url, View content, boolean small) {
-        if (wins.size() >= 2) {
+        if (wins.size() >= 3) {
             WebWindow old = wins.get(0);
             String n = old.name;
             old.close();
-            toast("Maximum 2 windows: closed " + n);
+            toast("Maximum 3 windows: closed " + n);
         }
-        boolean used0 = false;
-        for (WebWindow w : wins) if (w.slot == 0) used0 = true;
-        int slot = used0 ? 1 : 0;
+        int slot = 0;
+        while (slot < 3) {
+            boolean usedS = false;
+            for (WebWindow w : wins) if (w.slot == slot) usedS = true;
+            if (!usedS) break;
+            slot++;
+        }
+        if (slot > 2) slot = 2;
         android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
         int dw = desk.getWidth() > 0 ? desk.getWidth() : dm.widthPixels;
         int dh = desk.getHeight() > 0 ? desk.getHeight() : dm.heightPixels - dp(64);
@@ -985,8 +996,10 @@ public class MainActivity extends Activity {
         lp.topMargin = pad;
         try {
             WebWindow win = new WebWindow(this, name, url, content, winHost, slot);
+            win.small = small;
             desk.addView(win, lp);
             wins.add(win);
+            if (!small) retile();
             win.setAlpha(0f);
             win.setScaleX(0.93f);
             win.setScaleY(0.93f);
@@ -1206,6 +1219,10 @@ public class MainActivity extends Activity {
             case KeyEvent.KEYCODE_Q: toggleQuick(); return true;
             case KeyEvent.KEYCODE_P: openPhotos(null); return true;
             case KeyEvent.KEYCODE_X: openTool("Speed"); return true;
+            case KeyEvent.KEYCODE_O: openTool("Downloads"); return true;
+            case KeyEvent.KEYCODE_J: openTool("Convert"); return true;
+            case KeyEvent.KEYCODE_K: toggleKb(); return true;
+            case KeyEvent.KEYCODE_R: cycleSplit(); return true;
             default: return false;
         }
     }
@@ -1233,7 +1250,9 @@ public class MainActivity extends Activity {
                         + "V Clipboard    T Timer    S Search    L Lock\n"
                         + "D Show desktop    W Close window    Tab Switch window\n"
                         + "U Update launcher    Q Quick settings\n"
-                        + "P Photos    X Speed test\n\n"
+                        + "P Photos    X Speed test    O Downloads\n"
+                        + "J Converter    R Split size 50/70/30\n"
+                        + "K Keyboard-mouse mode (arrows, Enter = click)\n\n"
                         + "Ctrl+T new browser, Ctrl+W close, Ctrl+Tab switch\n"
                         + "Ctrl+Shift+Esc Task manager\n"
                         + "Win key alone = START    Esc = close menus\n"
@@ -2149,6 +2168,794 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    // ======================= EXTRAS 2 =======================
+
+    private TextView musicTitle, musicBtn, prayerV, newsTag, newsV;
+    private android.media.MediaPlayer mp;
+    private final List<File> songs = new ArrayList<>();
+    private int songIdx = -1;
+    private long lastEvCheck = 0, lastNewsFetch = 0, lastNewsShow = 0, lastPrayerCheck = 0;
+    private final List<String[]> newsItems = new ArrayList<>();
+    private int newsIdx = 0;
+    private boolean newsFetching = false, prayerFetching = false;
+    private String prayerDay = "", prayerKey = "", prayerFired = "";
+    private final String[] pNames = {"Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"};
+    private final String[] pRaw = new String[5];
+    private boolean kbMode = false, kbDown = false;
+    private float kbX, kbY;
+    private long kbDownTime;
+    private View kbCursor;
+
+    private void beep() {
+        try {
+            android.media.Ringtone r = android.media.RingtoneManager.getRingtone(this,
+                    android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION));
+            if (r != null) r.play();
+        } catch (Throwable t) {
+            // ignore
+        }
+    }
+
+    // ---- window tiling / split ----
+    private void retile() {
+        List<WebWindow> ts = new ArrayList<>();
+        for (WebWindow w : wins) if (!w.small && !w.minimized && !w.maximized) ts.add(w);
+        if (ts.isEmpty()) return;
+        Collections.sort(ts, new java.util.Comparator<WebWindow>() {
+            public int compare(WebWindow x, WebWindow y) { return x.slot - y.slot; }
+        });
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        int dw = desk.getWidth() > 0 ? desk.getWidth() : dm.widthPixels;
+        int dh = desk.getHeight() > 0 ? desk.getHeight() : dm.heightPixels - dp(64);
+        int pad = dp(10);
+        int hgt = dh - pad * 2;
+        int n = ts.size();
+        float r = WebWindow.ratio;
+        if (n == 1) {
+            WebWindow w = ts.get(0);
+            int wd = (int) ((dw - pad * 3) * (w.slot == 0 ? r : 1f - r));
+            w.place(w.slot == 0 ? pad : dw - pad - wd, pad, wd, hgt);
+        } else if (n == 2) {
+            int wl = (int) ((dw - pad * 3) * r);
+            int wr = dw - pad * 3 - wl;
+            ts.get(0).place(pad, pad, wl, hgt);
+            ts.get(1).place(pad * 2 + wl, pad, wr, hgt);
+        } else {
+            int wd = (dw - pad * 4) / 3;
+            for (int i = 0; i < n; i++) ts.get(i).place(pad + i * (wd + pad), pad, wd, hgt);
+        }
+    }
+
+    private void cycleSplit() {
+        float r = WebWindow.ratio;
+        WebWindow.ratio = r < 0.4f ? 0.5f : (r < 0.6f ? 0.7f : 0.3f);
+        prefs.edit().putFloat("split", WebWindow.ratio).apply();
+        toast("Split: " + Math.round(WebWindow.ratio * 100) + " / " + Math.round(100 - WebWindow.ratio * 100));
+        retile();
+    }
+
+    // ---- file search inside the search box ----
+    private int searchTok = 0;
+
+    private void searchFiles(final String ql) {
+        final int tok = ++searchTok;
+        if (ql.length() < 2) return;
+        new Thread(new Runnable() {
+            public void run() {
+                final List<File> out = new ArrayList<>();
+                java.util.ArrayDeque<File> dq = new java.util.ArrayDeque<>();
+                dq.add(Environment.getExternalStorageDirectory());
+                int seen = 0;
+                while (!dq.isEmpty() && out.size() < 6 && seen < 8000 && tok == searchTok) {
+                    File d = dq.poll();
+                    File[] fs = d.listFiles();
+                    if (fs == null) continue;
+                    for (File f : fs) {
+                        seen++;
+                        String n = f.getName();
+                        if (n.startsWith(".")) continue;
+                        if (n.toLowerCase(Locale.ENGLISH).contains(ql)) {
+                            out.add(f);
+                            if (out.size() >= 6) break;
+                        }
+                        if (f.isDirectory() && !n.equals("Android")) dq.add(f);
+                    }
+                }
+                if (out.isEmpty()) return;
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        if (tok != searchTok || searchPanel.getVisibility() != View.VISIBLE) return;
+                        int at = Math.max(0, searchResults.getChildCount() - 1);
+                        for (final File f : out) {
+                            TextView t = btn((f.isDirectory() ? "[Folder] " : "[File] ") + f.getName()
+                                    + "    " + f.getParentFile().getName(), false);
+                            t.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+                            t.setSingleLine(true);
+                            t.setOnClickListener(new View.OnClickListener() {
+                                public void onClick(View v) {
+                                    hideSearch();
+                                    if (f.isDirectory()) openTool("Files");
+                                    else Tools.openFile(MainActivity.this, f, fileOpener);
+                                }
+                            });
+                            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+                            p.setMargins(0, 0, 0, dp(5));
+                            searchResults.addView(t, Math.min(at++, searchResults.getChildCount()), p);
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    // ---- calendar events / reminders ----
+    private String dayKey(int y, int m, int d) {
+        return String.format(Locale.ENGLISH, "%04d-%02d-%02d", y, m + 1, d);
+    }
+
+    private boolean hasEvents(int y, int m, int d) {
+        String k = dayKey(y, m, d) + " ";
+        for (String line : prefs.getString("events", "").split("\n")) {
+            if (line.startsWith(k)) return true;
+        }
+        return false;
+    }
+
+    private void dayDialog(final int y, final int m, final int d) {
+        final String key = dayKey(y, m, d);
+        final List<String> lines = new ArrayList<>();
+        final List<CharSequence> shown = new ArrayList<>();
+        for (String line : prefs.getString("events", "").split("\n")) {
+            if (!line.startsWith(key + " ")) continue;
+            String[] p = line.split("\t", -1);
+            if (p.length < 2) continue;
+            lines.add(line);
+            shown.add(p[0].substring(11) + "   " + p[1] + "   (tap to delete)");
+        }
+        shown.add("+ Add reminder");
+        new AlertDialog.Builder(this)
+                .setTitle(key)
+                .setItems(shown.toArray(new CharSequence[0]), new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dlg, int which) {
+                        if (which == lines.size()) {
+                            addEventDialog(key);
+                        } else {
+                            String all = prefs.getString("events", "");
+                            prefs.edit().putString("events", all.replace(lines.get(which) + "\n", "")).apply();
+                            toast("Deleted");
+                            renderCal();
+                        }
+                    }
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void addEventDialog(final String key) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(10), dp(20), 0);
+        final EditText tm = new EditText(this);
+        tm.setSingleLine(true);
+        tm.setText("09:00");
+        tm.setHint("Time (24h) like 14:30");
+        final EditText tx = new EditText(this);
+        tx.setSingleLine(true);
+        tx.setHint("What to remember");
+        box.addView(tm);
+        box.addView(tx);
+        new AlertDialog.Builder(this)
+                .setTitle("Reminder on " + key)
+                .setView(box)
+                .setPositiveButton("Save", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dlg, int w) {
+                        String t = tm.getText().toString().trim();
+                        String x = tx.getText().toString().trim().replace("\t", " ").replace("\n", " ");
+                        if (!t.matches("^\\d{1,2}:\\d{2}$") || x.length() == 0) {
+                            toast("Time must look like 14:30 and text can't be empty");
+                            return;
+                        }
+                        String[] hm = t.split(":");
+                        int hh = Integer.parseInt(hm[0]), mm = Integer.parseInt(hm[1]);
+                        if (hh > 23 || mm > 59) {
+                            toast("Invalid time");
+                            return;
+                        }
+                        String line = key + String.format(Locale.ENGLISH, " %02d:%02d", hh, mm) + "\t" + x + "\t0\n";
+                        prefs.edit().putString("events", prefs.getString("events", "") + line).apply();
+                        toast("Reminder saved");
+                        renderCal();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void checkEvents() {
+        String all = prefs.getString("events", "");
+        if (all.length() == 0) return;
+        SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ENGLISH);
+        f.setTimeZone(tz);
+        long now = System.currentTimeMillis();
+        StringBuilder sb = new StringBuilder();
+        boolean changed = false;
+        for (String line : all.split("\n")) {
+            if (line.trim().length() == 0) continue;
+            String[] p = line.split("\t", -1);
+            if (p.length == 3) {
+                try {
+                    long t = f.parse(p[0]).getTime();
+                    if (p[2].equals("0") && t <= now) {
+                        if (now - t < 6 * 3600000L) fireReminder(p[1]);
+                        line = p[0] + "\t" + p[1] + "\t1";
+                        changed = true;
+                    } else if (p[2].equals("1") && now - t > 7 * 86400000L) {
+                        changed = true;
+                        continue;
+                    }
+                } catch (Exception e) {
+                    // keep line
+                }
+            }
+            sb.append(line).append("\n");
+        }
+        if (changed) prefs.edit().putString("events", sb.toString()).apply();
+    }
+
+    private void fireReminder(String text) {
+        wakeSaver();
+        beep();
+        try {
+            new AlertDialog.Builder(this).setTitle("Reminder").setMessage(text)
+                    .setPositiveButton("OK", null).show();
+        } catch (Throwable t) {
+            toast("Reminder: " + text);
+        }
+    }
+
+    // ---- music widget ----
+    private void loadSongs() {
+        songs.clear();
+        java.util.ArrayDeque<File> dq = new java.util.ArrayDeque<>();
+        dq.add(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC));
+        int depth = 0;
+        while (!dq.isEmpty() && songs.size() < 300 && depth++ < 200) {
+            File d = dq.poll();
+            File[] fs = d.listFiles();
+            if (fs == null) continue;
+            for (File f : fs) {
+                String n = f.getName().toLowerCase(Locale.ENGLISH);
+                if (f.isDirectory()) dq.add(f);
+                else if (n.endsWith(".mp3") || n.endsWith(".m4a") || n.endsWith(".wav") || n.endsWith(".ogg")
+                        || n.endsWith(".aac") || n.endsWith(".flac")) songs.add(f);
+            }
+        }
+        Collections.sort(songs, new java.util.Comparator<File>() {
+            public int compare(File x, File y) { return x.getName().compareToIgnoreCase(y.getName()); }
+        });
+    }
+
+    private void musicPlay(int i) {
+        if (songs.isEmpty()) loadSongs();
+        if (songs.isEmpty()) {
+            toast("No songs found in the Music folder");
+            return;
+        }
+        songIdx = ((i % songs.size()) + songs.size()) % songs.size();
+        try {
+            if (mp != null) mp.release();
+            mp = new android.media.MediaPlayer();
+            mp.setDataSource(songs.get(songIdx).getPath());
+            mp.prepare();
+            mp.setOnCompletionListener(new android.media.MediaPlayer.OnCompletionListener() {
+                public void onCompletion(android.media.MediaPlayer x) { musicPlay(songIdx + 1); }
+            });
+            mp.start();
+            String n = songs.get(songIdx).getName();
+            int dot = n.lastIndexOf('.');
+            musicTitle.setText(dot > 0 ? n.substring(0, dot) : n);
+            musicBtn.setText("Pause");
+        } catch (Throwable t) {
+            toast("Cannot play this song");
+            mp = null;
+        }
+    }
+
+    private void musicToggle() {
+        if (mp == null) {
+            musicPlay(songIdx < 0 ? 0 : songIdx);
+        } else if (mp.isPlaying()) {
+            mp.pause();
+            musicBtn.setText("Play");
+        } else {
+            mp.start();
+            musicBtn.setText("Pause");
+        }
+    }
+
+    private void musicPick() {
+        if (songs.isEmpty()) loadSongs();
+        if (songs.isEmpty()) {
+            toast("No songs found in the Music folder");
+            return;
+        }
+        final CharSequence[] names = new CharSequence[songs.size()];
+        for (int i = 0; i < names.length; i++) names[i] = songs.get(i).getName();
+        new AlertDialog.Builder(this).setTitle("Music")
+                .setItems(names, new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int which) { musicPlay(which); }
+                }).show();
+    }
+
+    private void buildExtraWidgets2(android.util.DisplayMetrics dm) {
+        int x = dm.widthPixels - dp(204) * 2;
+        // music
+        LinearLayout mu = cardBase("MUSIC");
+        musicTitle = label("Tap to choose a song", 13, Color.WHITE, false);
+        musicTitle.setSingleLine(true);
+        musicTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        musicTitle.setClickable(true);
+        musicTitle.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { musicPick(); }
+        });
+        mu.addView(musicTitle);
+        LinearLayout mr = new LinearLayout(this);
+        mr.setOrientation(LinearLayout.HORIZONTAL);
+        TextView pv = btn("<", false), nx = btn(">", false);
+        musicBtn = btn("Play", true);
+        pv.setGravity(Gravity.CENTER);
+        nx.setGravity(Gravity.CENTER);
+        musicBtn.setGravity(Gravity.CENTER);
+        pv.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { musicPlay(songIdx - 1); }
+        });
+        nx.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { musicPlay(songIdx + 1); }
+        });
+        musicBtn.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { musicToggle(); }
+        });
+        LinearLayout.LayoutParams b1 = new LinearLayout.LayoutParams(dp(40), dp(34));
+        LinearLayout.LayoutParams b2 = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        b2.leftMargin = dp(6);
+        b2.rightMargin = dp(6);
+        mr.addView(pv, b1);
+        mr.addView(musicBtn, b2);
+        mr.addView(nx, new LinearLayout.LayoutParams(dp(40), dp(34)));
+        LinearLayout.LayoutParams mrl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mrl.topMargin = dp(8);
+        mu.addView(mr, mrl);
+        addCardSized(7, mu, x, dp(14), 190, 96);
+
+        // prayer times
+        LinearLayout pr = cardBase("PRAYER TIME");
+        prayerV = label("Loading...", 15, Color.WHITE, true);
+        pr.addView(prayerV);
+        pr.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < 5; i++) {
+                    if (pRaw[i] != null) sb.append(pNames[i]).append(" ").append(pRaw[i]).append("   ");
+                }
+                toast(sb.length() == 0 ? "Prayer times not loaded yet" : sb.toString());
+            }
+        });
+        addCardSized(8, pr, x, dp(120), 190, 96);
+
+        // news / cricket
+        LinearLayout nw = cardBase("NEWS");
+        newsTag = (TextView) nw.getChildAt(0);
+        newsV = label("Loading...", 12, Color.WHITE, false);
+        newsV.setMaxLines(4);
+        newsV.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        nw.addView(newsV);
+        nw.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                newsIdx++;
+                lastNewsShow = 0;
+                if (newsItems.isEmpty()) fetchNews();
+            }
+        });
+        addCardSized(9, nw, x, dp(226), 190, 118);
+        fetchNews();
+        fetchPrayer();
+    }
+
+    private static String xmlClean(String s) {
+        s = s.replace("<![CDATA[", "").replace("]]>", "");
+        return s.replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'")
+                .replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").trim();
+    }
+
+    private List<String> rssTitles(String xml, int max) {
+        List<String> out = new ArrayList<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<item>.*?<title>(.*?)</title>", java.util.regex.Pattern.DOTALL).matcher(xml);
+        while (m.find() && out.size() < max) out.add(xmlClean(m.group(1)));
+        return out;
+    }
+
+    private void fetchNews() {
+        if (newsFetching) return;
+        newsFetching = true;
+        lastNewsFetch = System.currentTimeMillis();
+        new Thread(new Runnable() {
+            public void run() {
+                final List<String[]> out = new ArrayList<>();
+                try {
+                    for (String t : rssTitles(http("https://static.espncricinfo.com/rss/livescores.xml"), 4)) {
+                        out.add(new String[]{"CRICKET", t});
+                    }
+                } catch (Throwable e) {
+                    // no cricket feed
+                }
+                try {
+                    boolean bn = prefs.getBoolean("newsbn", true);
+                    String u = bn ? "https://news.google.com/rss?hl=bn&gl=BD&ceid=BD:bn"
+                            : "https://news.google.com/rss?hl=en-BD&gl=BD&ceid=BD:en";
+                    for (String t : rssTitles(http(u), 10)) out.add(new String[]{"NEWS", t});
+                } catch (Throwable e) {
+                    // no news
+                }
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        newsFetching = false;
+                        if (!out.isEmpty()) {
+                            newsItems.clear();
+                            newsItems.addAll(out);
+                        }
+                        lastNewsShow = 0;
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void fetchPrayer() {
+        if (prayerFetching) return;
+        prayerFetching = true;
+        final String today = dayKey2();
+        final String la = prefs.getString("lat", "23.8103"), lo = prefs.getString("lon", "90.4125");
+        new Thread(new Runnable() {
+            public void run() {
+                String[] got = null;
+                try {
+                    String j = http("https://api.aladhan.com/v1/timings?latitude=" + la + "&longitude=" + lo + "&method=1");
+                    JSONObject t = new JSONObject(j).getJSONObject("data").getJSONObject("timings");
+                    got = new String[5];
+                    for (int i = 0; i < 5; i++) got[i] = t.getString(pNames[i]).substring(0, 5);
+                } catch (Throwable e) {
+                    got = null;
+                }
+                final String[] fg = got;
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        prayerFetching = false;
+                        if (fg != null) {
+                            System.arraycopy(fg, 0, pRaw, 0, 5);
+                            prayerDay = today;
+                            prayerKey = la;
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private String dayKey2() {
+        SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH);
+        f.setTimeZone(tz);
+        return f.format(new Date());
+    }
+
+    private long prayerMillis(String hhmm) {
+        Calendar c = Calendar.getInstance(tz);
+        String[] p = hhmm.split(":");
+        c.set(Calendar.HOUR_OF_DAY, Integer.parseInt(p[0]));
+        c.set(Calendar.MINUTE, Integer.parseInt(p[1]));
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        return c.getTimeInMillis();
+    }
+
+    private void extras2Tick() {
+        long now = System.currentTimeMillis();
+        if (now - lastEvCheck > 5000) {
+            lastEvCheck = now;
+            try {
+                checkEvents();
+            } catch (Throwable t) {
+                // ignore
+            }
+            if (!prayerDay.equals(dayKey2()) || !prayerKey.equals(prefs.getString("lat", "23.8103"))) {
+                if (now - lastPrayerCheck > 60000) {
+                    lastPrayerCheck = now;
+                    fetchPrayer();
+                }
+            }
+            if (prayerV != null && prayerDay.length() > 0) {
+                try {
+                    int nxt = -1;
+                    long nt = 0;
+                    for (int i = 0; i < 5; i++) {
+                        long t = prayerMillis(pRaw[i]);
+                        if (now >= t && now - t < 90000 && prefs.getBoolean("azan", true)
+                                && !prayerFired.equals(prayerDay + pNames[i])) {
+                            prayerFired = prayerDay + pNames[i];
+                            beep();
+                            toast("Time for " + pNames[i] + " prayer");
+                        }
+                        if (nxt < 0 && t > now) {
+                            nxt = i;
+                            nt = t;
+                        }
+                    }
+                    if (nxt < 0) {
+                        prayerV.setText("Fajr  " + pRaw[0] + "\ntomorrow");
+                    } else {
+                        long mins = (nt - now) / 60000;
+                        prayerV.setText(pNames[nxt] + "  " + pRaw[nxt] + "\nin " + (mins / 60) + "h " + (mins % 60) + "m");
+                    }
+                } catch (Throwable t) {
+                    prayerV.setText("--");
+                }
+            } else if (prayerV != null) {
+                prayerV.setText("Loading...");
+            }
+            if (now - lastNewsFetch > 600000L) fetchNews();
+        }
+        if (newsV != null && !newsItems.isEmpty() && now - lastNewsShow > 8000) {
+            lastNewsShow = now;
+            String[] it = newsItems.get(newsIdx++ % newsItems.size());
+            newsTag.setText(it[0]);
+            newsV.setText(it[1]);
+        }
+    }
+
+    // ---- keyboard mouse mode ----
+    private final class KbCursorView extends View {
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path path = new Path();
+
+        KbCursorView(Context c) {
+            super(c);
+            fill.setColor(Color.WHITE);
+            line.setColor(Color.BLACK);
+            line.setStyle(Paint.Style.STROKE);
+            line.setStrokeWidth(dp(2));
+            float s = dp(22);
+            path.moveTo(0, 0);
+            path.lineTo(0, s);
+            path.lineTo(s * 0.28f, s * 0.74f);
+            path.lineTo(s * 0.5f, s * 1.12f);
+            path.lineTo(s * 0.64f, s * 1.05f);
+            path.lineTo(s * 0.42f, s * 0.68f);
+            path.lineTo(s * 0.78f, s * 0.68f);
+            path.close();
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            c.drawPath(path, fill);
+            c.drawPath(path, line);
+        }
+    }
+
+    private void toggleKb() {
+        kbMode = !kbMode;
+        kbDown = false;
+        if (kbMode) {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            kbX = dm.widthPixels / 2f;
+            kbY = dm.heightPixels / 2f;
+            moveKb(0, 0);
+            kbCursor.setVisibility(View.VISIBLE);
+            kbCursor.bringToFront();
+            toast("Keyboard mouse ON: arrows move, Enter/Space click, R right-click, PgUp/PgDn scroll, Ctrl fast, Shift slow. Alt+K or Esc = off");
+        } else {
+            kbCursor.setVisibility(View.GONE);
+            toast("Keyboard mouse off");
+        }
+    }
+
+    private void moveKb(float dx, float dy) {
+        android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+        kbX = Math.max(0, Math.min(dm.widthPixels - 2, kbX + dx));
+        kbY = Math.max(0, Math.min(dm.heightPixels - 2, kbY + dy));
+        kbCursor.setTranslationX(kbX);
+        kbCursor.setTranslationY(kbY);
+    }
+
+    private void kbInject(int action) {
+        long t = SystemClock.uptimeMillis();
+        if (action == MotionEvent.ACTION_DOWN) kbDownTime = t;
+        MotionEvent ev = MotionEvent.obtain(kbDownTime, t, action, kbX, kbY, 0);
+        dispatchTouchEvent(ev);
+        ev.recycle();
+    }
+
+    private MotionEvent kbMouseEvent(int action, int buttons, float vscroll) {
+        long t = SystemClock.uptimeMillis();
+        MotionEvent.PointerProperties pp = new MotionEvent.PointerProperties();
+        pp.id = 0;
+        pp.toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords pc = new MotionEvent.PointerCoords();
+        pc.x = kbX;
+        pc.y = kbY;
+        pc.pressure = 1f;
+        pc.size = 1f;
+        if (vscroll != 0f) pc.setAxisValue(MotionEvent.AXIS_VSCROLL, vscroll);
+        return MotionEvent.obtain(t, t, action, 1, new MotionEvent.PointerProperties[]{pp},
+                new MotionEvent.PointerCoords[]{pc}, 0, buttons, 1f, 1f, 0, 0,
+                android.view.InputDevice.SOURCE_MOUSE, 0);
+    }
+
+    private boolean kbKey(KeyEvent e) {
+        if (!kbMode || locked || e.isAltPressed() || e.isMetaPressed()) return false;
+        int kc = e.getKeyCode();
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
+        float step = e.isCtrlPressed() ? dp(90) : (e.isShiftPressed() ? dp(6) : dp(28));
+        switch (kc) {
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+            case KeyEvent.KEYCODE_DPAD_UP:
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                if (down) {
+                    float dx = kc == KeyEvent.KEYCODE_DPAD_LEFT ? -step : (kc == KeyEvent.KEYCODE_DPAD_RIGHT ? step : 0);
+                    float dy = kc == KeyEvent.KEYCODE_DPAD_UP ? -step : (kc == KeyEvent.KEYCODE_DPAD_DOWN ? step : 0);
+                    moveKb(dx, dy);
+                    if (kbDown) kbInject(MotionEvent.ACTION_MOVE);
+                }
+                return true;
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_SPACE:
+                if (down && e.getRepeatCount() == 0) {
+                    kbDown = true;
+                    kbInject(MotionEvent.ACTION_DOWN);
+                } else if (!down && kbDown) {
+                    kbDown = false;
+                    kbInject(MotionEvent.ACTION_UP);
+                }
+                return true;
+            case KeyEvent.KEYCODE_R:
+                if (down && e.getRepeatCount() == 0) {
+                    MotionEvent dn = kbMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_SECONDARY, 0f);
+                    dispatchTouchEvent(dn);
+                    dn.recycle();
+                    MotionEvent up = kbMouseEvent(MotionEvent.ACTION_UP, 0, 0f);
+                    dispatchTouchEvent(up);
+                    up.recycle();
+                }
+                return true;
+            case KeyEvent.KEYCODE_PAGE_UP:
+            case KeyEvent.KEYCODE_PAGE_DOWN:
+                if (down) {
+                    MotionEvent sc = kbMouseEvent(MotionEvent.ACTION_SCROLL, 0, kc == KeyEvent.KEYCODE_PAGE_UP ? 2f : -2f);
+                    dispatchGenericMotionEvent(sc);
+                    sc.recycle();
+                }
+                return true;
+            case KeyEvent.KEYCODE_ESCAPE:
+                if (down) toggleKb();
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private void buildExtras2(FrameLayout root) {
+        kbCursor = new KbCursorView(this);
+        root.addView(kbCursor, new FrameLayout.LayoutParams(dp(30), dp(34)));
+        kbCursor.setVisibility(View.GONE);
+        WebWindow.ratio = prefs.getFloat("split", 0.5f);
+    }
+
+    // ---- settings backup ----
+    private void copyFile(File a, File b) throws Exception {
+        java.io.FileInputStream in = new java.io.FileInputStream(a);
+        FileOutputStream out = new FileOutputStream(b);
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        out.close();
+        in.close();
+    }
+
+    private File backupDir() {
+        File d = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        d.mkdirs();
+        return d;
+    }
+
+    private void backupSettings() {
+        try {
+            JSONObject o = new JSONObject();
+            for (Map.Entry<String, ?> en : prefs.getAll().entrySet()) {
+                Object v = en.getValue();
+                JSONObject e = new JSONObject();
+                String t = v instanceof Boolean ? "b" : v instanceof Integer ? "i" : v instanceof Long ? "l"
+                        : v instanceof Float ? "f" : v instanceof String ? "s" : null;
+                if (t == null) continue;
+                e.put("t", t);
+                e.put("v", v);
+                o.put(en.getKey(), e);
+            }
+            File dir = backupDir();
+            FileOutputStream fo = new FileOutputStream(new File(dir, "VQ-backup.json"));
+            fo.write(o.toString().getBytes("UTF-8"));
+            fo.close();
+            if (customFile.exists()) copyFile(customFile, new File(dir, "VQ-wallpaper.jpg"));
+            if (profileFile.exists()) copyFile(profileFile, new File(dir, "VQ-profile.jpg"));
+            toast("Backup saved in Download folder (VQ-backup.json)");
+        } catch (Throwable t) {
+            toast("Backup failed. Allow storage permission (open Files once)");
+        }
+    }
+
+    private void restoreSettings() {
+        final File dir = backupDir();
+        final File f = new File(dir, "VQ-backup.json");
+        if (!f.exists()) {
+            toast("No VQ-backup.json found in the Download folder");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setMessage("Restore settings from the backup file? The launcher will restart.")
+                .setPositiveButton("Restore", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        try {
+                            BufferedReader r = new BufferedReader(new InputStreamReader(new java.io.FileInputStream(f), "UTF-8"));
+                            StringBuilder sb = new StringBuilder();
+                            String line;
+                            while ((line = r.readLine()) != null) sb.append(line);
+                            r.close();
+                            JSONObject o = new JSONObject(sb.toString());
+                            SharedPreferences.Editor ed = prefs.edit();
+                            java.util.Iterator<String> it = o.keys();
+                            while (it.hasNext()) {
+                                String k = it.next();
+                                JSONObject e = o.getJSONObject(k);
+                                String t = e.getString("t");
+                                if (t.equals("b")) ed.putBoolean(k, e.getBoolean("v"));
+                                else if (t.equals("i")) ed.putInt(k, e.getInt("v"));
+                                else if (t.equals("l")) ed.putLong(k, e.getLong("v"));
+                                else if (t.equals("f")) ed.putFloat(k, (float) e.getDouble("v"));
+                                else ed.putString(k, e.getString("v"));
+                            }
+                            ed.apply();
+                            File bw = new File(dir, "VQ-wallpaper.jpg");
+                            if (bw.exists()) copyFile(bw, customFile);
+                            File bp = new File(dir, "VQ-profile.jpg");
+                            if (bp.exists()) copyFile(bp, profileFile);
+                            toast("Restored");
+                            recreate();
+                        } catch (Throwable t) {
+                            toast("Restore failed");
+                        }
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void toggleAzan() {
+        boolean on = !prefs.getBoolean("azan", true);
+        prefs.edit().putBoolean("azan", on).apply();
+        toast(on ? "Prayer alerts on" : "Prayer alerts off");
+    }
+
+    private void toggleNewsLang() {
+        boolean bn = !prefs.getBoolean("newsbn", true);
+        prefs.edit().putBoolean("newsbn", bn).apply();
+        toast(bn ? "News in Bengali" : "News in English");
+        newsItems.clear();
+        fetchNews();
+    }
+
     private void cleanRam() {
         toast("Cleaning RAM...");
         Tools.cleanRam(this, new Tools.Done() {
@@ -2366,6 +3173,7 @@ public class MainActivity extends Activity {
         addCtx("Clock style (next)", () -> cycleClock());
         addCtx("Quick settings", () -> toggleQuick());
         addCtx("New folder", () -> newFolderDialog());
+        addCtx("Keyboard mouse mode", () -> toggleKb());
         addCtx("Dock show / hide", () -> toggleDock());
         addCtx("Screenshot", () -> screenshot());
         addCtx("Reset layout", () -> resetLayout());
@@ -2419,6 +3227,7 @@ public class MainActivity extends Activity {
 
     private void refreshSearch(final String raw) {
         searchResults.removeAllViews();
+        searchTok++;
         final String q = raw.trim();
         if (q.length() == 0) return;
         String ql = q.toLowerCase(Locale.ENGLISH);
@@ -2472,6 +3281,7 @@ public class MainActivity extends Activity {
         });
         searchResults.addView(w, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+        searchFiles(ql);
     }
 
     private void toggleCal() {
@@ -2512,6 +3322,15 @@ public class MainActivity extends Activity {
                         t.setBackground(glass(RED, 0, 8, 0));
                         t.setTypeface(Typeface.DEFAULT_BOLD);
                     }
+                    final int fy = c.get(Calendar.YEAR), fm = c.get(Calendar.MONTH), fd = d;
+                    if (hasEvents(fy, fm, fd) && !(thisMonth && d == today.get(Calendar.DAY_OF_MONTH))) {
+                        t.setBackground(glass(0x44FFFFFF, RED, 8, 1));
+                    }
+                    t.setClickable(true);
+                    t.setFocusable(true);
+                    t.setOnClickListener(new View.OnClickListener() {
+                        public void onClick(View v) { dayDialog(fy, fm, fd); }
+                    });
                     d++;
                 }
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(36), 1f);
@@ -2790,6 +3609,8 @@ public class MainActivity extends Activity {
         addMenu(left, "Clipboard history", () -> openTool("Clipboard"));
         addMenu(left, "Photos", () -> openPhotos(null));
         addMenu(left, "Internet speed test", () -> openTool("Speed"));
+        addMenu(left, "Downloads (Alt+O)", () -> openTool("Downloads"));
+        addMenu(left, "Unit & currency converter (Alt+J)", () -> openTool("Convert"));
         addMenu(left, "Quick settings (Alt+Q)", () -> toggleQuick());
         addMenu(left, "Timer / Stopwatch", () -> openTool("Timer"));
         addMenu(left, "Clean RAM", () -> cleanRam());
@@ -2811,6 +3632,12 @@ public class MainActivity extends Activity {
         addMenu(left, "Glass blur on / off", () -> toggleBlur());
         addMenu(left, "Screen saver on / off", () -> toggleSaver());
         addMenu(left, "New desktop folder", () -> newFolderDialog());
+        addMenu(left, "Window split size (Alt+R)", () -> cycleSplit());
+        addMenu(left, "Keyboard mouse mode (Alt+K)", () -> toggleKb());
+        addMenu(left, "Prayer alerts on / off", () -> toggleAzan());
+        addMenu(left, "News language (Bengali / English)", () -> toggleNewsLang());
+        addMenu(left, "Backup settings", () -> backupSettings());
+        addMenu(left, "Restore settings", () -> restoreSettings());
         addMenu(left, "Taskbar glass / solid", () -> toggleGlass());
         addMenu(left, "Taskbar center / left", () -> toggleAlign());
         addMenu(left, "Startup site...", () -> startupDialog());
@@ -3528,6 +4355,7 @@ public class MainActivity extends Activity {
                     if (o.optBoolean("success", false)) {
                         lat = o.getDouble("latitude");
                         lon = o.getDouble("longitude");
+                        prefs.edit().putString("lat", "" + lat).putString("lon", "" + lon).apply();
                         JSONObject z = o.optJSONObject("timezone");
                         final String zid = z == null ? "" : z.optString("id", "");
                         if (zid.length() > 0) {
@@ -3909,6 +4737,7 @@ public class MainActivity extends Activity {
         int kc = e.getKeyCode();
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
         if (wakeSaver()) return true;
+        if (kbKey(e)) return true;
         if (kc == KeyEvent.KEYCODE_META_LEFT || kc == KeyEvent.KEYCODE_META_RIGHT) {
             if (down) metaCombo = false;
             else if (!metaCombo && !locked) toggleStart();
@@ -4011,6 +4840,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        try {
+            if (mp != null) mp.release();
+        } catch (Throwable x) {
+            // ignore
+        }
         if (badgeAnim != null) badgeAnim.cancel();
         try {
             unregisterReceiver(dlReceiver);

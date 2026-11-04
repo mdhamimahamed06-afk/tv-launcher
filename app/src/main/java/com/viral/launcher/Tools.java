@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.app.DownloadManager;
+import android.database.Cursor;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -46,6 +48,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.VideoView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -62,6 +65,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Locale;
 
@@ -973,6 +978,362 @@ final class Tools {
             }
         });
         col.postDelayed(loop[0], 500);
+        return col;
+    }
+
+    // ------------------------------------------------------------ open any file
+
+    static void openFile(Activity a, File f, Opener op) {
+        if (op != null && op.open(f)) return;
+        try {
+            try {
+                StrictMode.class.getMethod("disableDeathOnFileUriExposure").invoke(null);
+            } catch (Throwable t) {
+                // ignore
+            }
+            String name = f.getName();
+            int dot = name.lastIndexOf('.');
+            String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase(Locale.ENGLISH) : "";
+            String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+            if (ext.equals("apk")) mime = "application/vnd.android.package-archive";
+            if (mime == null) mime = "*/*";
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(Uri.fromFile(f), mime);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            a.startActivity(i);
+        } catch (Throwable t) {
+            Toast.makeText(a, "No app can open this file", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ------------------------------------------------------------ Downloads
+
+    static View downloads(final Activity a, final int accent, final Opener op) {
+        final DownloadManager dm = (DownloadManager) a.getSystemService(Context.DOWNLOAD_SERVICE);
+        final LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(0xFF14141A);
+        col.setPadding(dp(a, 12), dp(a, 10), dp(a, 12), dp(a, 8));
+        col.addView(head(a, "DOWNLOADS   (tap = open, long-press = remove)", accent));
+        ScrollView sv = new ScrollView(a);
+        final LinearLayout list = new LinearLayout(a);
+        list.setOrientation(LinearLayout.VERTICAL);
+        sv.addView(list);
+        col.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        final String[] last = {""};
+        final Runnable[] loop = new Runnable[1];
+        loop[0] = new Runnable() {
+            public void run() {
+                if (!col.isAttachedToWindow()) return;
+                try {
+                    Cursor c = dm.query(new DownloadManager.Query());
+                    StringBuilder sig = new StringBuilder();
+                    List<Object[]> rows = new ArrayList<>();
+                    if (c != null) {
+                        int iId = c.getColumnIndex(DownloadManager.COLUMN_ID);
+                        int iT = c.getColumnIndex(DownloadManager.COLUMN_TITLE);
+                        int iS = c.getColumnIndex(DownloadManager.COLUMN_STATUS);
+                        int iD = c.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR);
+                        int iTot = c.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES);
+                        int iU = c.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI);
+                        while (c.moveToNext() && rows.size() < 40) {
+                            Object[] r = {c.getLong(iId), c.getString(iT), c.getInt(iS), c.getLong(iD),
+                                    c.getLong(iTot), c.getString(iU)};
+                            rows.add(r);
+                            sig.append(r[0]).append(':').append(r[2]).append(':').append(r[3]).append(';');
+                        }
+                        c.close();
+                    }
+                    if (!sig.toString().equals(last[0])) {
+                        last[0] = sig.toString();
+                        list.removeAllViews();
+                        if (rows.isEmpty()) {
+                            TextView e = txt(a, "No downloads yet.", 14, 0xAAFFFFFF, false);
+                            e.setPadding(dp(a, 6), dp(a, 14), 0, 0);
+                            list.addView(e);
+                        }
+                        for (Object[] r : rows) addDlRow(a, accent, dm, list, r, op);
+                    }
+                } catch (Throwable t) {
+                    // ignore
+                }
+                col.postDelayed(loop[0], 1000);
+            }
+        };
+        col.post(loop[0]);
+        return col;
+    }
+
+    private static void addDlRow(final Activity a, int accent, final DownloadManager dm, LinearLayout list,
+                                 Object[] r, final Opener op) {
+        final long id = (Long) r[0];
+        String title = r[1] == null || ((String) r[1]).length() == 0 ? "(file)" : (String) r[1];
+        int st = (Integer) r[2];
+        long done = (Long) r[3], tot = (Long) r[4];
+        final String uri = (String) r[5];
+        LinearLayout row = new LinearLayout(a);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(a, 12), dp(a, 8), dp(a, 12), dp(a, 8));
+        row.setBackground(box(a, 0x22FFFFFF, 0x22FFFFFF, 10, 1));
+        row.setFocusable(true);
+        row.setClickable(true);
+        TextView t = txt(a, title, 14, Color.WHITE, true);
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        row.addView(t);
+        String status;
+        if (st == DownloadManager.STATUS_SUCCESSFUL) status = "Done   " + human(tot > 0 ? tot : done);
+        else if (st == DownloadManager.STATUS_FAILED) status = "Failed";
+        else if (st == DownloadManager.STATUS_PAUSED) status = "Paused   " + human(done);
+        else if (st == DownloadManager.STATUS_PENDING) status = "Waiting...";
+        else status = tot > 0 ? (int) (done * 100 / tot) + "%   " + human(done) + " / " + human(tot) : human(done);
+        row.addView(txt(a, status, 12, st == DownloadManager.STATUS_FAILED ? 0xFFFF8A8A : 0xBBFFFFFF, false));
+        if (st == DownloadManager.STATUS_RUNNING && tot > 0) {
+            LinearLayout b = bar(a, accent);
+            setBar(b, done / (double) tot);
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 6));
+            bl.topMargin = dp(a, 6);
+            row.addView(b, bl);
+        }
+        final boolean ok = st == DownloadManager.STATUS_SUCCESSFUL;
+        row.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (!ok || uri == null) {
+                    Toast.makeText(a, "Not finished yet", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String path = Uri.parse(uri).getPath();
+                if (path == null || !new File(path).exists()) {
+                    Toast.makeText(a, "File not found (moved or deleted)", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                openFile(a, new File(path), op);
+            }
+        });
+        row.setOnLongClickListener(new View.OnLongClickListener() {
+            public boolean onLongClick(View v) {
+                new AlertDialog.Builder(a)
+                        .setMessage("Remove this download? The file will be deleted too.")
+                        .setPositiveButton("Remove", new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface d, int w) { dm.remove(id); }
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+                return true;
+            }
+        });
+        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rl.topMargin = dp(a, 6);
+        list.addView(row, rl);
+    }
+
+    // ------------------------------------------------------------ Converter
+
+    private static final Map<String, Double> RATES = new HashMap<>();
+    private static String ratesNote = "Offline rates (approximate)";
+    private static boolean ratesFetched = false;
+    private static final String[] CATS = {"Currency", "Length", "Weight", "Temp", "Speed", "Data"};
+    private static final String[][] UNITS = {
+            {"USD", "SAR", "BDT", "EUR", "GBP", "INR", "AED", "MYR", "KWD", "QAR", "JPY"},
+            {"m", "km", "cm", "mm", "inch", "ft", "yard", "mile"},
+            {"kg", "g", "mg", "lb", "oz", "ton"},
+            {"C", "F", "K"},
+            {"km/h", "m/s", "mph", "knot"},
+            {"B", "KB", "MB", "GB", "TB"}};
+    private static final double[][] FACT = {
+            null,
+            {1, 1000, 0.01, 0.001, 0.0254, 0.3048, 0.9144, 1609.344},
+            {1, 0.001, 0.000001, 0.45359237, 0.028349523, 1000},
+            null,
+            {0.277778, 1, 0.44704, 0.514444},
+            {1, 1024, 1048576, 1073741824.0, 1099511627776.0}};
+
+    private static double rate(String u) {
+        Double d = RATES.get(u);
+        return d == null ? 1 : d;
+    }
+
+    static double convertValue(int cat, int from, int to, double v) {
+        double base;
+        if (cat == 0) base = v / rate(UNITS[0][from]);
+        else if (cat == 3) base = from == 0 ? v : from == 1 ? (v - 32) * 5 / 9 : v - 273.15;
+        else base = v * FACT[cat][from];
+        if (cat == 0) return base * rate(UNITS[0][to]);
+        if (cat == 3) return to == 0 ? base : to == 1 ? base * 9 / 5 + 32 : base + 273.15;
+        return base / FACT[cat][to];
+    }
+
+    private static String fmtNum(double v) {
+        if (v == 0) return "0";
+        double av = Math.abs(v);
+        if (av >= 0.001 && av < 1e15) {
+            String s = String.format(Locale.ENGLISH, "%,.6f", v);
+            if (s.contains(".")) {
+                while (s.endsWith("0")) s = s.substring(0, s.length() - 1);
+                if (s.endsWith(".")) s = s.substring(0, s.length() - 1);
+            }
+            return s;
+        }
+        return String.format(Locale.ENGLISH, "%.4e", v);
+    }
+
+    static View converter(final Activity a, final int accent) {
+        if (RATES.isEmpty()) {
+            String[] u = UNITS[0];
+            double[] d = {1, 3.75, 122, 0.92, 0.78, 83.5, 3.6725, 4.7, 0.307, 3.64, 150};
+            for (int i = 0; i < u.length; i++) RATES.put(u[i], d[i]);
+        }
+        final LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(0xFF14141A);
+        col.setPadding(dp(a, 14), dp(a, 12), dp(a, 14), dp(a, 12));
+        col.addView(head(a, "UNIT & CURRENCY CONVERTER", accent));
+
+        LinearLayout cr = new LinearLayout(a);
+        cr.setOrientation(LinearLayout.HORIZONTAL);
+        final TextView[] cb = new TextView[CATS.length];
+        col.addView(cr, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 40)));
+
+        final EditText et = new EditText(a);
+        et.setSingleLine(true);
+        et.setText("1");
+        et.setTextColor(Color.WHITE);
+        et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL
+                | InputType.TYPE_NUMBER_FLAG_SIGNED);
+        et.setBackground(box(a, 0x33FFFFFF, 0x44FFFFFF, 8, 1));
+        et.setPadding(dp(a, 10), dp(a, 6), dp(a, 10), dp(a, 6));
+        LinearLayout.LayoutParams el = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 48));
+        el.topMargin = dp(a, 14);
+        col.addView(et, el);
+
+        final List<String> unitList = new ArrayList<>();
+        final BaseAdapter ad = new BaseAdapter() {
+            public int getCount() { return unitList.size(); }
+            public Object getItem(int i) { return unitList.get(i); }
+            public long getItemId(int i) { return i; }
+            public View getView(int i, View cv, ViewGroup p) {
+                TextView t = txt(a, unitList.get(i), 17, Color.WHITE, true);
+                t.setPadding(dp(a, 10), dp(a, 8), dp(a, 10), dp(a, 8));
+                return t;
+            }
+            public View getDropDownView(int i, View cv, ViewGroup p) {
+                TextView t = txt(a, unitList.get(i), 17, Color.WHITE, false);
+                t.setPadding(dp(a, 14), dp(a, 12), dp(a, 14), dp(a, 12));
+                t.setBackgroundColor(0xFF22222A);
+                return t;
+            }
+        };
+        final Spinner sFrom = new Spinner(a);
+        final Spinner sTo = new Spinner(a);
+        sFrom.setAdapter(ad);
+        sTo.setAdapter(ad);
+        sFrom.setBackground(box(a, 0x22FFFFFF, 0x44FFFFFF, 8, 1));
+        sTo.setBackground(box(a, 0x22FFFFFF, 0x44FFFFFF, 8, 1));
+        LinearLayout sr = new LinearLayout(a);
+        sr.setOrientation(LinearLayout.HORIZONTAL);
+        sr.setGravity(Gravity.CENTER_VERTICAL);
+        sr.addView(sFrom, new LinearLayout.LayoutParams(0, dp(a, 46), 1f));
+        TextView arrow = txt(a, "  →  ", 20, Color.WHITE, true);
+        sr.addView(arrow);
+        sr.addView(sTo, new LinearLayout.LayoutParams(0, dp(a, 46), 1f));
+        LinearLayout.LayoutParams srl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        srl.topMargin = dp(a, 10);
+        col.addView(sr, srl);
+
+        final TextView res = txt(a, "", 30, Color.WHITE, true);
+        res.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        rl.topMargin = dp(a, 22);
+        col.addView(res, rl);
+        final TextView note = txt(a, "", 12, 0x99FFFFFF, false);
+        note.setGravity(Gravity.CENTER);
+        col.addView(note);
+
+        final int[] cat = {0};
+        final Runnable calc = new Runnable() {
+            public void run() {
+                try {
+                    double v = Double.parseDouble(et.getText().toString().trim());
+                    double o = convertValue(cat[0], sFrom.getSelectedItemPosition(), sTo.getSelectedItemPosition(), v);
+                    res.setText(fmtNum(o) + " " + UNITS[cat[0]][sTo.getSelectedItemPosition()]);
+                } catch (Throwable t) {
+                    res.setText("-");
+                }
+                note.setText(cat[0] == 0 ? ratesNote : "");
+            }
+        };
+        final Runnable setCat = new Runnable() {
+            public void run() {
+                unitList.clear();
+                Collections.addAll(unitList, UNITS[cat[0]]);
+                ad.notifyDataSetChanged();
+                sFrom.setSelection(0);
+                sTo.setSelection(cat[0] == 0 ? 2 : 1);
+                for (int i = 0; i < cb.length; i++) {
+                    cb[i].setBackground(box(a, i == cat[0] ? accent : 0x22FFFFFF, 0x33FFFFFF, 8, 1));
+                }
+                calc.run();
+            }
+        };
+        for (int i = 0; i < CATS.length; i++) {
+            final int k = i;
+            TextView b = txt(a, CATS[i], 12, Color.WHITE, true);
+            b.setGravity(Gravity.CENTER);
+            b.setFocusable(true);
+            b.setClickable(true);
+            b.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) { cat[0] = k; setCat.run(); }
+            });
+            cb[i] = b;
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+            bl.leftMargin = dp(a, 2);
+            bl.rightMargin = dp(a, 2);
+            cr.addView(b, bl);
+        }
+        AdapterView.OnItemSelectedListener sel = new AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) { calc.run(); }
+            public void onNothingSelected(AdapterView<?> p) {}
+        };
+        sFrom.setOnItemSelectedListener(sel);
+        sTo.setOnItemSelectedListener(sel);
+        et.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a1, int b1, int c1) {}
+            public void onTextChanged(CharSequence s, int a1, int b1, int c1) {}
+            public void afterTextChanged(Editable s) { calc.run(); }
+        });
+        setCat.run();
+
+        if (!ratesFetched) {
+            ratesFetched = true;
+            new Thread(new Runnable() {
+                public void run() {
+                    try {
+                        HttpURLConnection c = (HttpURLConnection) new URL("https://open.er-api.com/v6/latest/USD").openConnection();
+                        c.setConnectTimeout(8000);
+                        c.setReadTimeout(8000);
+                        java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(c.getInputStream()));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = r.readLine()) != null) sb.append(line);
+                        r.close();
+                        org.json.JSONObject rates = new org.json.JSONObject(sb.toString()).getJSONObject("rates");
+                        for (String u : UNITS[0]) {
+                            if (rates.has(u)) RATES.put(u, rates.getDouble(u));
+                        }
+                        ratesNote = "Live exchange rates";
+                    } catch (Throwable t) {
+                        ratesFetched = false;
+                    }
+                    col.post(calc);
+                }
+            }).start();
+        } else {
+            ratesNote = "Live exchange rates";
+        }
         return col;
     }
 

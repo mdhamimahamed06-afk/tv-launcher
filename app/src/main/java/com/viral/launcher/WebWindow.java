@@ -42,6 +42,8 @@ final class WebWindow extends FrameLayout {
     final int slot;
     boolean minimized = false;
     boolean maximized = false;
+    boolean small = false;
+    static float ratio = 0.5f;
 
     private final Host host;
     private WebView web;
@@ -399,17 +401,29 @@ final class WebWindow extends FrameLayout {
         web.reload();
     }
 
+    void place(int left, int top, int w, int h) {
+        FrameLayout.LayoutParams l = lp();
+        maximized = false;
+        l.leftMargin = left;
+        l.topMargin = top;
+        l.width = w;
+        l.height = h;
+        setLayoutParams(l);
+    }
+
     void snap(boolean left) {
         if (!(getParent() instanceof View)) return;
         View p = (View) getParent();
         int pad = dp(10);
-        int w = (p.getWidth() - pad * 3) / 2;
+        int avail = p.getWidth() - pad * 3;
+        int wl = (int) (avail * ratio);
+        int w = left ? wl : avail - wl;
         FrameLayout.LayoutParams l = lp();
         maximized = false;
         l.width = w;
         l.height = p.getHeight() - pad * 2;
         l.topMargin = pad;
-        l.leftMargin = left ? pad : pad * 2 + w;
+        l.leftMargin = left ? pad : pad * 2 + wl;
         setLayoutParams(l);
         bringToFront();
         host.onWindowChanged();
