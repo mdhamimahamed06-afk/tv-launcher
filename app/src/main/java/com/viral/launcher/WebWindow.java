@@ -52,6 +52,7 @@ final class WebWindow extends FrameLayout {
     private TextView bDesk;
     private boolean desktop = false;
     private String mobileUa = "";
+    private String desktopUa = DESKTOP_UA;
     static final String H264_JS = "(function(){try{var re=/vp9|vp09|av01|av1/i;"
             + "if(window.MediaSource&&MediaSource.isTypeSupported){var o=MediaSource.isTypeSupported.bind(MediaSource);"
             + "MediaSource.isTypeSupported=function(t){return re.test(t)?false:o(t);};}"
@@ -224,6 +225,12 @@ final class WebWindow extends FrameLayout {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
+        try {
+            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+        } catch (Throwable t) {
+            // ignore
+        }
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
         web.setLayerType(View.LAYER_TYPE_HARDWARE, null);
@@ -233,6 +240,8 @@ final class WebWindow extends FrameLayout {
         s.setDisplayZoomControls(false);
         try {
             mobileUa = s.getUserAgentString().replace("; wv", "");
+            java.util.regex.Matcher cm = java.util.regex.Pattern.compile("Chrome/([0-9.]+)").matcher(mobileUa);
+            if (cm.find()) desktopUa = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + cm.group(1) + " Safari/537.36";
             s.setUserAgentString(mobileUa);
         } catch (Exception e) {
             // keep default
@@ -394,7 +403,7 @@ final class WebWindow extends FrameLayout {
     void setDesktop(boolean on) {
         desktop = on;
         WebSettings s = web.getSettings();
-        s.setUserAgentString(on ? DESKTOP_UA : mobileUa);
+        s.setUserAgentString(on ? desktopUa : mobileUa);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         bDesk.setText(on ? "MOB" : "PC");

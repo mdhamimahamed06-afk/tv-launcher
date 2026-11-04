@@ -989,6 +989,7 @@ public class MainActivity extends Activity {
         View v;
         if (name.equals("Files")) v = Tools.files(this, RED, fileOpener);
         else if (name.equals("Speed")) v = Tools.speedTest(this, RED);
+        else if (name.equals("Gallery")) v = Tools.gallery(this, RED, fileOpener);
         else if (name.equals("Downloads")) v = Tools.downloads(this, RED, fileOpener);
         else if (name.equals("Convert")) v = Tools.converter(this, RED);
         else if (name.equals("Photos")) v = Tools.imageViewer(this, RED, null);
@@ -1252,6 +1253,7 @@ public class MainActivity extends Activity {
             case KeyEvent.KEYCODE_U: updateLauncher(); return true;
             case KeyEvent.KEYCODE_Q: toggleQuick(); return true;
             case KeyEvent.KEYCODE_P: openPhotos(null); return true;
+            case KeyEvent.KEYCODE_I: openTool("Gallery"); return true;
             case KeyEvent.KEYCODE_X: openTool("Speed"); return true;
             case KeyEvent.KEYCODE_O: openTool("Downloads"); return true;
             case KeyEvent.KEYCODE_Z: openBuiltin("TikTok"); return true;
@@ -1289,7 +1291,7 @@ public class MainActivity extends Activity {
                         + "U Update launcher    Q Quick settings\n"
                         + "P Photos    X Speed test    O Downloads\n"
                         + "J Converter    R Split size 50/70/30\n"
-                        + "Z TikTok    A WhatsApp    H Telegram\n"
+                        + "Z TikTok    A WhatsApp    H Telegram    I Photo albums\n"
                         + "K Keyboard-mouse mode (arrows, Enter = click)\n\n"
                         + "Ctrl+T new browser, Ctrl+W close, Ctrl+Tab switch\n"
                         + "Ctrl+Shift+Esc Task manager\n"
@@ -1450,7 +1452,7 @@ public class MainActivity extends Activity {
         if (name.equals("Facebook")) return "https://m.facebook.com";
         if (name.equals("TikTok")) return "https://www.tiktok.com";
         if (name.equals("WhatsApp")) return "https://web.whatsapp.com";
-        if (name.equals("Telegram")) return "https://web.telegram.org/a/";
+        if (name.equals("Telegram")) return "https://web.telegram.org/k/";
         if (name.equals("Viral Quality")) return SITE_URL;
         for (String line : prefs.getString("sites", "").split("\n")) {
             int i = line.indexOf('\t');
@@ -1461,7 +1463,7 @@ public class MainActivity extends Activity {
 
     private void openBuiltin(String name) {
         if (name.equals("Files") || name.equals("Notepad") || name.equals("Calculator") || name.equals("System")
-                || name.equals("Clipboard") || name.equals("Timer")) {
+                || name.equals("Clipboard") || name.equals("Timer") || name.equals("Gallery")) {
             openTool(name);
             return;
         }
@@ -1591,7 +1593,7 @@ public class MainActivity extends Activity {
             b.setClickable(true);
             b.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
-                    if (nm.equals("Photos")) openPhotos(null);
+                    if (nm.equals("Photos")) openTool("Gallery");
                     else if (nm.equals("Speed")) openTool("Speed");
                     else if (nm.equals("Quick")) toggleQuick();
                     else openBuiltin(nm);
@@ -1742,7 +1744,7 @@ public class MainActivity extends Activity {
         else if (nm.equals("Next wallpaper")) nextWall();
         else if (nm.equals("Update")) updateLauncher();
         else if (nm.equals("Speed test")) openTool("Speed");
-        else if (nm.equals("Photos")) openPhotos(null);
+        else if (nm.equals("Photos")) openTool("Gallery");
     }
 
     private void toggleDock() {
@@ -2986,6 +2988,32 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private void openExternal(String url) {
+        hideStart();
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        i.setPackage("com.android.chrome");
+        try {
+            startActivity(i);
+        } catch (Throwable t) {
+            try {
+                i.setPackage(null);
+                startActivity(i);
+            } catch (Throwable t2) {
+                toast("No browser app found");
+            }
+        }
+    }
+
+    private void showEngine() {
+        String ua = android.webkit.WebSettings.getDefaultUserAgent(this);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("Chrome/([0-9.]+)").matcher(ua);
+        String ver = m.find() ? m.group(1) : "unknown";
+        new AlertDialog.Builder(this).setTitle("Browser engine")
+                .setMessage("WebView (Chrome engine): " + ver + "\nAndroid: " + Build.VERSION.RELEASE
+                        + "\n\nWhatsApp Web / Telegram Web need a recent engine (about Chrome 100+).")
+                .setPositiveButton("OK", null).show();
+    }
+
     private void toggleAzan() {
         boolean on = !prefs.getBoolean("azan", true);
         prefs.edit().putBoolean("azan", on).apply();
@@ -3298,7 +3326,7 @@ public class MainActivity extends Activity {
         final String[][] bi = {{"YouTube", "YouTube"}, {"Google", "Google"}, {"Facebook", "Facebook"}, {"Browser", "Browser"},
                 {"Files", "Files"}, {"Notepad", "Notepad"}, {"Calculator", "Calculator"}, {"System", "Task manager"},
                 {"Clipboard", "Clipboard"}, {"Timer", "Timer / Stopwatch"},
-                {"TikTok", "TikTok"}, {"WhatsApp", "WhatsApp"}, {"Telegram", "Telegram"}};
+                {"Gallery", "Photo albums"}, {"TikTok", "TikTok"}, {"WhatsApp", "WhatsApp"}, {"Telegram", "Telegram"}};
         for (final String[] b : bi) {
             if (n >= 9) break;
             if (b[1].toLowerCase(Locale.ENGLISH).contains(ql) || b[0].toLowerCase(Locale.ENGLISH).contains(ql)) {
@@ -3644,6 +3672,9 @@ public class MainActivity extends Activity {
         addMenu(left, "TikTok", () -> openBuiltin("TikTok"));
         addMenu(left, "WhatsApp (Alt+A)", () -> openBuiltin("WhatsApp"));
         addMenu(left, "Telegram (Alt+H)", () -> openBuiltin("Telegram"));
+        addMenu(left, "WhatsApp in Chrome app", () -> openExternal("https://web.whatsapp.com"));
+        addMenu(left, "Telegram in Chrome app", () -> openExternal("https://web.telegram.org/k/"));
+        addMenu(left, "TikTok in Chrome app", () -> openExternal("https://www.tiktok.com"));
         addMenu(left, "Viral Quality", new Runnable() { public void run() { openWeb("Viral Quality", SITE_URL); } });
         addMenu(left, "+ New browser window", new Runnable() { public void run() { openWeb("Browser", "https://www.google.com"); } });
         webBox = new LinearLayout(this);
@@ -3656,7 +3687,8 @@ public class MainActivity extends Activity {
         addMenu(left, "Calculator", () -> openTool("Calculator"));
         addMenu(left, "Task manager / System", () -> openTool("System"));
         addMenu(left, "Clipboard history", () -> openTool("Clipboard"));
-        addMenu(left, "Photos", () -> openPhotos(null));
+        addMenu(left, "Photo albums (Alt+I)", () -> openTool("Gallery"));
+        addMenu(left, "Photos (all in one viewer)", () -> openPhotos(null));
         addMenu(left, "Internet speed test", () -> openTool("Speed"));
         addMenu(left, "Downloads (Alt+O)", () -> openTool("Downloads"));
         addMenu(left, "Unit & currency converter (Alt+J)", () -> openTool("Convert"));
@@ -3684,6 +3716,7 @@ public class MainActivity extends Activity {
         addMenu(left, "New desktop folder", () -> newFolderDialog());
         addMenu(left, "Window split size (Alt+R)", () -> cycleSplit());
         addMenu(left, "Keyboard mouse mode (Alt+K)", () -> toggleKb());
+        addMenu(left, "Browser engine version", () -> showEngine());
         addMenu(left, "Prayer alerts on / off", () -> toggleAzan());
         addMenu(left, "News language (Bengali / English)", () -> toggleNewsLang());
         addMenu(left, "Backup settings", () -> backupSettings());

@@ -42,7 +42,9 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.MimeTypeMap;
+import android.widget.AbsListView;
 import android.widget.AdapterView;
+import android.widget.GridView;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -1334,6 +1336,314 @@ final class Tools {
         } else {
             ratesNote = "Live exchange rates";
         }
+        return col;
+    }
+
+    // ------------------------------------------------------------ Photo albums
+
+    private static final android.util.LruCache<String, Bitmap> THUMBS = new android.util.LruCache<>(90);
+    private static final java.util.concurrent.ExecutorService POOL = java.util.concurrent.Executors.newFixedThreadPool(2);
+
+    private static void loadThumb(final Activity a, final ImageView iv, final File f) {
+        final String key = f.getPath();
+        iv.setTag(key);
+        Bitmap c = THUMBS.get(key);
+        if (c != null) {
+            iv.setImageBitmap(c);
+            return;
+        }
+        iv.setImageDrawable(null);
+        POOL.execute(new Runnable() {
+            public void run() {
+                final Bitmap b = decode(f, 260);
+                if (b == null) return;
+                THUMBS.put(key, b);
+                a.runOnUiThread(new Runnable() {
+                    public void run() {
+                        if (key.equals(iv.getTag())) iv.setImageBitmap(b);
+                    }
+                });
+            }
+        });
+    }
+
+    private static File newestImage(File dir) {
+        File best = null;
+        File[] fs = dir.listFiles();
+        if (fs != null) {
+            for (File f : fs) {
+                if (f.isFile() && isImage(f.getName()) && (best == null || f.lastModified() > best.lastModified())) best = f;
+            }
+        }
+        return best;
+    }
+
+    static View gallery(final Activity a, final int accent, final Opener op) {
+        final LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setBackgroundColor(0xFF14141A);
+
+        LinearLayout top = new LinearLayout(a);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(a, 8), dp(a, 6), dp(a, 8), dp(a, 4));
+        col.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 48)));
+        final TextView back = button(a, "‹ Albums", accent, 12, false);
+        final TextView title = txt(a, "PHOTO ALBUMS", 13, Color.WHITE, true);
+        title.setPadding(dp(a, 10), 0, dp(a, 10), 0);
+        title.setSingleLine(true);
+        TextView newAlbum = button(a, "+ Album", accent, 12, false);
+        TextView refresh = button(a, "Refresh", accent, 12, false);
+        top.addView(back, new LinearLayout.LayoutParams(dp(a, 84), dp(a, 34)));
+        top.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(dp(a, 78), dp(a, 34));
+        bl.leftMargin = dp(a, 5);
+        top.addView(newAlbum, bl);
+        top.addView(refresh, bl);
+
+        final TextView msg = txt(a, "", 13, 0xFFFFB4B4, false);
+        msg.setPadding(dp(a, 14), dp(a, 4), dp(a, 14), dp(a, 4));
+        col.addView(msg);
+
+        final GridView grid = new GridView(a);
+        grid.setNumColumns(GridView.AUTO_FIT);
+        grid.setColumnWidth(dp(a, 150));
+        grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
+        grid.setHorizontalSpacing(dp(a, 6));
+        grid.setVerticalSpacing(dp(a, 6));
+        grid.setPadding(dp(a, 8), dp(a, 4), dp(a, 8), dp(a, 8));
+        grid.setClipToPadding(false);
+        grid.setSelector(box(a, 0x33FFFFFF, accent, 8, 2));
+        col.addView(grid, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        final List<File> albums = new ArrayList<>();
+        final Map<File, Integer> counts = new HashMap<>();
+        final List<File> items = new ArrayList<>();
+        final File[] cur = {null};
+
+        final BaseAdapter ad = new BaseAdapter() {
+            public int getCount() { return cur[0] == null ? albums.size() : items.size(); }
+            public Object getItem(int i) { return null; }
+            public long getItemId(int i) { return i; }
+            public View getView(int i, View cv, ViewGroup p) {
+                FrameLayout cell = new FrameLayout(a);
+                cell.setLayoutParams(new AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(a, 130)));
+                cell.setBackground(box(a, 0xFF22222A, 0, 8, 0));
+                ImageView iv = new ImageView(a);
+                iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                cell.addView(iv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+                if (cur[0] == null) {
+                    File d = albums.get(i);
+                    File cover = newestImage(d);
+                    if (cover != null) loadThumb(a, iv, cover);
+                    TextView t = txt(a, d.getName() + "  (" + counts.get(d) + ")", 12, Color.WHITE, true);
+                    t.setSingleLine(true);
+                    t.setEllipsize(TextUtils.TruncateAt.END);
+                    t.setBackgroundColor(0xAA000000);
+                    t.setPadding(dp(a, 8), dp(a, 5), dp(a, 8), dp(a, 5));
+                    cell.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+                } else {
+                    loadThumb(a, iv, items.get(i));
+                }
+                return cell;
+            }
+        };
+        grid.setAdapter(ad);
+
+        final Runnable showAlbums = new Runnable() {
+            public void run() {
+                cur[0] = null;
+                items.clear();
+                back.setVisibility(View.INVISIBLE);
+                title.setText("PHOTO ALBUMS  (" + albums.size() + ")");
+                ad.notifyDataSetChanged();
+            }
+        };
+        final Runnable[] scan = new Runnable[1];
+        final Runnable showCur = new Runnable() {
+            public void run() {
+                if (cur[0] == null) return;
+                items.clear();
+                items.addAll(picturesIn(cur[0]));
+                Collections.sort(items, new java.util.Comparator<File>() {
+                    public int compare(File x, File y) { return Long.compare(y.lastModified(), x.lastModified()); }
+                });
+                back.setVisibility(View.VISIBLE);
+                title.setText(cur[0].getName() + "  (" + items.size() + ")");
+                ad.notifyDataSetChanged();
+            }
+        };
+        scan[0] = new Runnable() {
+            public void run() {
+                if (Build.VERSION.SDK_INT >= 23
+                        && a.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    a.requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,
+                            Manifest.permission.WRITE_EXTERNAL_STORAGE}, 11);
+                    msg.setText("Allow storage permission, then press Refresh.");
+                    msg.setVisibility(View.VISIBLE);
+                    return;
+                }
+                msg.setText("Searching for photos...");
+                msg.setVisibility(View.VISIBLE);
+                new Thread(new Runnable() {
+                    public void run() {
+                        final List<File> found = new ArrayList<>();
+                        final Map<File, Integer> cnt = new HashMap<>();
+                        java.util.ArrayDeque<File> dq = new java.util.ArrayDeque<>();
+                        java.util.ArrayDeque<Integer> depth = new java.util.ArrayDeque<>();
+                        dq.add(Environment.getExternalStorageDirectory());
+                        depth.add(0);
+                        int seen = 0;
+                        while (!dq.isEmpty() && seen < 20000 && found.size() < 80) {
+                            File d = dq.poll();
+                            int dep = depth.poll();
+                            File[] fs = d.listFiles();
+                            if (fs == null) continue;
+                            int n = 0;
+                            for (File f : fs) {
+                                seen++;
+                                String nm = f.getName();
+                                if (nm.startsWith(".")) continue;
+                                if (f.isDirectory()) {
+                                    if (dep < 4 && !nm.equals("Android")) {
+                                        dq.add(f);
+                                        depth.add(dep + 1);
+                                    }
+                                } else if (isImage(nm)) {
+                                    n++;
+                                }
+                            }
+                            if (n > 0) {
+                                found.add(d);
+                                cnt.put(d, n);
+                            }
+                        }
+                        File pics = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
+                        File[] kids = pics.listFiles();
+                        if (kids != null) {
+                            for (File k : kids) {
+                                if (k.isDirectory() && !found.contains(k) && !k.getName().startsWith(".")) {
+                                    found.add(k);
+                                    cnt.put(k, 0);
+                                }
+                            }
+                        }
+                        Collections.sort(found, new java.util.Comparator<File>() {
+                            public int compare(File x, File y) { return x.getName().compareToIgnoreCase(y.getName()); }
+                        });
+                        a.runOnUiThread(new Runnable() {
+                            public void run() {
+                                albums.clear();
+                                albums.addAll(found);
+                                counts.clear();
+                                counts.putAll(cnt);
+                                msg.setVisibility(albums.isEmpty() ? View.VISIBLE : View.GONE);
+                                msg.setText("No photos found on this device.");
+                                if (cur[0] == null) showAlbums.run();
+                                else showCur.run();
+                            }
+                        });
+                    }
+                }).start();
+            }
+        };
+
+        back.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { showAlbums.run(); }
+        });
+        refresh.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { scan[0].run(); }
+        });
+        newAlbum.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                final EditText et = new EditText(a);
+                et.setSingleLine(true);
+                et.setHint("Album name");
+                new AlertDialog.Builder(a).setTitle("New album").setView(et)
+                        .setPositiveButton("Create", new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface d, int w) {
+                                String n = et.getText().toString().trim();
+                                if (n.length() == 0 || n.contains("/")) {
+                                    Toast.makeText(a, "Invalid name", Toast.LENGTH_SHORT).show();
+                                    return;
+                                }
+                                File dir = new File(Environment.getExternalStoragePublicDirectory(
+                                        Environment.DIRECTORY_PICTURES), n);
+                                Toast.makeText(a, dir.mkdirs() || dir.exists() ? "Album created" : "Could not create",
+                                        Toast.LENGTH_SHORT).show();
+                                scan[0].run();
+                            }
+                        }).setNegativeButton("Cancel", null).show();
+            }
+        });
+        grid.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            public void onItemClick(AdapterView<?> p, View v, int i, long id) {
+                if (cur[0] == null) {
+                    cur[0] = albums.get(i);
+                    showCur.run();
+                } else {
+                    openFile(a, items.get(i), op);
+                }
+            }
+        });
+        grid.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            public boolean onItemLongClick(AdapterView<?> p, View v, int i, long id) {
+                if (cur[0] == null) return false;
+                final File f = items.get(i);
+                new AlertDialog.Builder(a).setTitle(f.getName())
+                        .setItems(new CharSequence[]{"Copy to another album", "Delete photo"},
+                                new DialogInterface.OnClickListener() {
+                                    public void onClick(DialogInterface d, int which) {
+                                        if (which == 1) {
+                                            f.delete();
+                                            scan[0].run();
+                                            return;
+                                        }
+                                        final List<File> targets = new ArrayList<>();
+                                        List<CharSequence> names = new ArrayList<>();
+                                        for (File al : albums) {
+                                            if (!al.equals(cur[0])) {
+                                                targets.add(al);
+                                                names.add(al.getName());
+                                            }
+                                        }
+                                        if (targets.isEmpty()) {
+                                            Toast.makeText(a, "Create another album first (+ Album)", Toast.LENGTH_SHORT).show();
+                                            return;
+                                        }
+                                        new AlertDialog.Builder(a).setTitle("Copy to...")
+                                                .setItems(names.toArray(new CharSequence[0]), new DialogInterface.OnClickListener() {
+                                                    public void onClick(DialogInterface d2, int w2) {
+                                                        final File dst = new File(targets.get(w2), f.getName());
+                                                        new Thread(new Runnable() {
+                                                            public void run() {
+                                                                boolean ok = true;
+                                                                try {
+                                                                    copyRec(f, dst);
+                                                                } catch (Throwable t) {
+                                                                    ok = false;
+                                                                }
+                                                                final boolean fok = ok;
+                                                                a.runOnUiThread(new Runnable() {
+                                                                    public void run() {
+                                                                        Toast.makeText(a, fok ? "Copied" : "Copy failed",
+                                                                                Toast.LENGTH_SHORT).show();
+                                                                        scan[0].run();
+                                                                    }
+                                                                });
+                                                            }
+                                                        }).start();
+                                                    }
+                                                }).show();
+                                    }
+                                }).show();
+                return true;
+            }
+        });
+        back.setVisibility(View.INVISIBLE);
+        col.post(scan[0]);
         return col;
     }
 
