@@ -544,6 +544,7 @@ public class MainActivity extends Activity {
         registerReceiver(dlReceiver, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
 
         setContentView(root);
+        startInbox();
         if (!booted) {
             booted = true;
             if (prefs.getString("pin", "").length() > 0) lockNow(); else runStartup();
@@ -997,6 +998,7 @@ public class MainActivity extends Activity {
         else if (name.equals("Calculator")) v = Tools.calculator(this, RED);
         else if (name.equals("Clipboard")) v = Tools.clipboard(this, RED);
         else if (name.equals("Timer")) v = Tools.timer(this, RED);
+        else if (name.equals("Inbox")) v = InboxView.create(this, RED, fileOpener, inboxInfo);
         else v = Tools.monitor(this, RED, winSrc);
         openWin(name, null, v, name.equals("Calculator") || name.equals("Timer") || name.equals("Convert"));
     }
@@ -1228,6 +1230,32 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private static final String GMAIL_URL = "https://mail.google.com";
+    private static final String GMAIL_NEW_URL =
+            "https://accounts.google.com/signup/v2/createaccount?service=mail&continue=https%3A%2F%2Fmail.google.com%2Fmail%2F&flowName=GlifWebSignIn&flowEntry=SignUp";
+
+    private final InboxView.Info inboxInfo = new InboxView.Info() {
+        public String url() {
+            String ip = localIp();
+            int port = InboxServer.livePort;
+            if (ip == null || port == 0) return null;
+            return "http://" + ip + ":" + port + "/?k=" + prefs.getString("inboxkey", "");
+        }
+    };
+
+    private void startInbox() {
+        try {
+            if (prefs.getString("inboxkey", null) == null) {
+                prefs.edit().putString("inboxkey", String.valueOf(1000 + new Random().nextInt(9000))).apply();
+            }
+            Intent i = new Intent(this, InboxService.class);
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
+            else startService(i);
+        } catch (Throwable t) {
+            // inbox is optional; never break the launcher
+        }
+    }
+
     private boolean handleShortcut(KeyEvent e) {
         if (runCustom(e)) return true;
         return handleBuiltinShortcut(e.getKeyCode());
@@ -1294,6 +1322,8 @@ public class MainActivity extends Activity {
                         + "Z TikTok    A WhatsApp    H Telegram    I Photo albums\n"
                         + "K Keyboard-mouse mode (arrows, Enter = click)\n\n"
                         + "Ctrl+T new browser, Ctrl+W close, Ctrl+Tab switch\n"
+                        + "Ctrl+G Gmail    Ctrl+Shift+G Create new Gmail\n"
+                        + "Ctrl+P Phone Inbox (files/text from your phone)\n"
                         + "Ctrl+Shift+Esc Task manager\n"
                         + "Win key alone = START    Esc = close menus\n"
                         + "PrtSc = Screenshot\n"
@@ -1376,9 +1406,9 @@ public class MainActivity extends Activity {
     private final List<View> iconViews = new ArrayList<>();
 
     private void buildDeskIcons(android.util.DisplayMetrics dm) {
-        final String[] names = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer", "TikTok", "WhatsApp", "Telegram"};
-        final String[] marks = {"Y", "G", "f", "B", "F", "N", "=", "S", "C", "T", "Tk", "Wa", "Tg"};
-        final int[] cols = {0xFFE11D2E, 0xFF2F7BFF, 0xFF1877F2, 0xFF4B5262, 0xFFF59E0B, 0xFF19B36B, 0xFF8B5CF6, 0xFF0EA5A5, 0xFFEC4899, 0xFF6366F1, 0xFF111111, 0xFF25D366, 0xFF229ED9};
+        final String[] names = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer", "TikTok", "WhatsApp", "Telegram", "Gmail", "New Gmail", "Inbox"};
+        final String[] marks = {"Y", "G", "f", "B", "F", "N", "=", "S", "C", "T", "Tk", "Wa", "Tg", "M", "+M", "In"};
+        final int[] cols = {0xFFE11D2E, 0xFF2F7BFF, 0xFF1877F2, 0xFF4B5262, 0xFFF59E0B, 0xFF19B36B, 0xFF8B5CF6, 0xFF0EA5A5, 0xFFEC4899, 0xFF6366F1, 0xFF111111, 0xFF25D366, 0xFF229ED9, 0xFFD93025, 0xFFB3261E, 0xFF0B8F8F};
         int rows = Math.max(3, (int) ((dm.heightPixels / dm.density - 62 - 40) / 98));
         boolean off = prefs.getBoolean("iconsoff", true);
         for (int i = 0; i < names.length; i++) {
@@ -1453,6 +1483,8 @@ public class MainActivity extends Activity {
         if (name.equals("TikTok")) return "https://www.tiktok.com";
         if (name.equals("WhatsApp")) return "https://web.whatsapp.com";
         if (name.equals("Telegram")) return "https://web.telegram.org/k/";
+        if (name.equals("Gmail")) return GMAIL_URL;
+        if (name.equals("New Gmail")) return GMAIL_NEW_URL;
         if (name.equals("Viral Quality")) return SITE_URL;
         for (String line : prefs.getString("sites", "").split("\n")) {
             int i = line.indexOf('\t');
@@ -1467,7 +1499,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (name.equals("Files") || name.equals("Notepad") || name.equals("Calculator") || name.equals("System")
-                || name.equals("Clipboard") || name.equals("Timer") || name.equals("Gallery")) {
+                || name.equals("Clipboard") || name.equals("Timer") || name.equals("Gallery") || name.equals("Inbox")) {
             openTool(name);
             return;
         }
@@ -2185,7 +2217,7 @@ public class MainActivity extends Activity {
         final String[] f = fs.get(fi);
         final List<String> ids = new ArrayList<>();
         final List<String> names = new ArrayList<>();
-        String[] builtin = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer", "TikTok", "WhatsApp", "Telegram"};
+        String[] builtin = {"YouTube", "Google", "Facebook", "Browser", "Files", "Notepad", "Calculator", "System", "Clipboard", "Timer", "TikTok", "WhatsApp", "Telegram", "Gmail", "New Gmail", "Inbox"};
         for (String b : builtin) { ids.add(b); names.add(b); }
         for (AppItem a : apps) {
             if (a.label == null) continue;
@@ -3717,6 +3749,8 @@ public class MainActivity extends Activity {
         addMenu(left, "TikTok", () -> openBuiltin("TikTok"));
         addMenu(left, "WhatsApp (Alt+A)", () -> openBuiltin("WhatsApp"));
         addMenu(left, "Telegram (Alt+H)", () -> openBuiltin("Telegram"));
+        addMenu(left, "Gmail (Ctrl+G)", () -> openBuiltin("Gmail"));
+        addMenu(left, "Create new Gmail (Ctrl+Shift+G)", () -> openBuiltin("New Gmail"));
         addMenu(left, "WhatsApp (modern browser)", () -> openExternal("https://web.whatsapp.com"));
         addMenu(left, "Telegram (modern browser)", () -> openExternal("https://web.telegram.org/k/"));
         addMenu(left, "TikTok (modern browser)", () -> openExternal("https://www.tiktok.com"));
@@ -3727,6 +3761,7 @@ public class MainActivity extends Activity {
         left.addView(webBox);
         refreshWebMenu();
         section(left, "TOOLS");
+        addMenu(left, "Phone Inbox (Ctrl+P)", () -> openTool("Inbox"));
         addMenu(left, "Files", () -> openTool("Files"));
         addMenu(left, "Notepad", () -> openTool("Notepad"));
         addMenu(left, "Calculator", () -> openTool("Calculator"));
@@ -4898,6 +4933,11 @@ public class MainActivity extends Activity {
                 if (kc == KeyEvent.KEYCODE_T) { newBrowser(); return true; }
                 if (kc == KeyEvent.KEYCODE_W) { closeTop(); return true; }
                 if (kc == KeyEvent.KEYCODE_TAB) { cycleWindows(); return true; }
+                if (kc == KeyEvent.KEYCODE_G) {
+                    if (e.isShiftPressed()) openBuiltin("New Gmail"); else openBuiltin("Gmail");
+                    return true;
+                }
+                if (kc == KeyEvent.KEYCODE_P) { openTool("Inbox"); return true; }
             }
         }
         // typing anywhere on the home screen opens search
